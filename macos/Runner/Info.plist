@@ -26,6 +26,8 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Pondera necesita controlar System Events para escribir el peso en la aplicacion que tenga el foco.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
