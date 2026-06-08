@@ -60,21 +60,54 @@ class _MainScreenState extends State<MainScreen> {
   String _cleanWeightDisplay = 'Sin receta';
   late SharedPreferences _prefs;
 
+  // Controladores para los prefijos y sufijos de teclado
+  final TextEditingController _prefixController = TextEditingController();
+  final TextEditingController _suffixController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _initSharedPreferences();
   }
 
-  // Inicializa el almacenamiento local de la Mac
+  @override
+  void dispose() {
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
+    _socketSubscription?.cancel();
+    _socket?.destroy();
+    _prefixController.dispose();
+    _suffixController.dispose();
+    super.dispose();
+  }
+
+  // Inicializa el almacenamiento local de la Mac y recupera los comandos
   void _initSharedPreferences() async {
     _prefs = await SharedPreferences.getInstance();
     setState(() {
       _savedRegex = _prefs.getString('pondera_recipe') ?? '';
+      _prefixController.text = _prefs.getString('pondera_prefix') ?? '';
+      _suffixController.text = _prefs.getString('pondera_suffix') ?? '';
       if (_savedRegex.isNotEmpty) {
         _cleanWeightDisplay = '---';
       }
     });
+  }
+
+  // Guarda los prefijos y sufijos manualmente (Aislado de eventos reactivos)
+  void _saveKeyModifiers() async {
+    await _prefs.setString('pondera_prefix', _prefixController.text);
+    await _prefs.setString('pondera_suffix', _suffixController.text);
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Comandos de teclado guardados'),
+          duration: Duration(milliseconds: 800), // Duración muy corta para no bloquear
+        ),
+      );
+    }
   }
 
   // Envía la última trama capturada a tu servidor n8n
@@ -82,9 +115,7 @@ class _MainScreenState extends State<MainScreen> {
     if (_receivedDataLog.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Primero captura al menos una trama en bruto del indicador.',
-          ),
+          content: Text('Primero captura al menos una trama en bruto del indicador.'),
         ),
       );
       return;
@@ -124,8 +155,7 @@ class _MainScreenState extends State<MainScreen> {
           });
         } else {
           setState(() {
-            _statusMessage =
-                'n8n respondió pero no envió la llave regex_pattern';
+            _statusMessage = 'n8n respondió pero no envió la llave regex_pattern';
           });
         }
       } else {
@@ -190,6 +220,29 @@ class _MainScreenState extends State<MainScreen> {
         .replaceAll(sourceDecimalSeparator, expectedDecimalSeparator);
   }
 
+  // Traduce bloques especiales como {TAB} o {ENTER} a comandos nativos de AppleScript
+  String _parseKeysToAppleScript(String input) {
+    if (input.isEmpty) return '';
+    
+    final StringBuffer scriptBuffer = StringBuffer();
+    final RegExp keyRegex = RegExp(r'(\{ENTER\}|\{TAB\}|\{SPACE\}|[^{]+)');
+    final matches = keyRegex.allMatches(input);
+
+    for (final match in matches) {
+      final token = match.group(0) ?? '';
+      if (token == '{TAB}') {
+        scriptBuffer.writeln('  key code 48');
+      } else if (token == '{ENTER}') {
+        scriptBuffer.writeln('  key code 36');
+      } else if (token == '{SPACE}') {
+        scriptBuffer.writeln('  key code 49');
+      } else {
+        scriptBuffer.writeln('  keystroke ${_appleScriptStringLiteral(token)}');
+      }
+    }
+    return scriptBuffer.toString();
+  }
+
   // Pega el peso en la app que tenga el foco usando la automatización de macOS.
   Future<void> _writeWeightToCursor([String? weight]) async {
     final weightToType = (weight ?? _cleanWeightDisplay).trim();
@@ -204,16 +257,25 @@ class _MainScreenState extends State<MainScreen> {
       return;
     }
 
-    // Evitar dobles ejecuciones accidentales si entran variaciones mínimas seguidas
     final now = DateTime.now();
     if (_lastTypedTime != null &&
-        now.difference(_lastTypedTime!) < const Duration(milliseconds: 1200)) {
+        now.difference(_lastTypedTime!) < const Duration(milliseconds: 1500)) {
       return;
     }
     _lastTypedTime = now;
 
+    // CAPA DE SEGURIDAD CRÍTICA: Quitamos el foco de cualquier campo de la app de Flutter
+    // para que la inyección de teclas nativas no altere el estado interno si la app está al frente.
+    if (mounted) {
+      FocusScope.of(context).unfocus();
+    }
+
+    // Capturamos el texto de los modificadores en variables locales estables antes del hilo asíncrono
+    final String currentPrefix = _prefixController.text;
+    final String currentSuffix = _suffixController.text;
+
     try {
-      // 1. Intento de copia con límite de tiempo estricto para no colgar la UI de Flutter
+      // 1. Intento de copia al portapapeles
       final copyResult = await Process.run('osascript', [
         '-e',
         'set the clipboard to ${_appleScriptStringLiteral(weightToType)}',
@@ -236,11 +298,16 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
 
-      // 2. Ejecución del keystroke aislado con un segundo timeout de control
+      // 2. Traducción y construcción dinámica del flujo completo de pulsaciones
+      final String prefixScript = _parseKeysToAppleScript(currentPrefix);
+      final String suffixScript = _parseKeysToAppleScript(currentSuffix);
+
       final script = '''
-delay 0.1
+delay 0.15
 tell application "System Events"
+$prefixScript
   keystroke "v" using {command down}
+$suffixScript
 end tell
 ''';
 
@@ -294,7 +361,7 @@ end tell
     }
   }
 
-  // Procesamiento directo y limpio optimizado para tramas estables únicas
+  // Procesamiento directo optimizado para tramas estables únicas
   void _processIncomingData(List<int> data) {
     try {
       String incomingText = utf8.decode(data, allowMalformed: true).trim();
@@ -431,15 +498,6 @@ end tell
   }
 
   @override
-  void dispose() {
-    _manualDisconnect = true;
-    _reconnectTimer?.cancel();
-    _socketSubscription?.cancel();
-    _socket?.destroy();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Pondera - Piloto de Red + n8n')),
@@ -470,6 +528,60 @@ end tell
                         fontWeight: FontWeight.bold,
                         color: Colors.amberAccent,
                       ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Comandos de Teclado (Ej: {TAB}, {ENTER}, {SPACE}, o texto directo)',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _prefixController,
+                            onSubmitted: (_) => _saveKeyModifiers(),
+                            decoration: const InputDecoration(
+                              labelText: 'Prefijo (Antes del peso)',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: _suffixController,
+                            onSubmitted: (_) => _saveKeyModifiers(),
+                            decoration: const InputDecoration(
+                              labelText: 'Sufijo (Después del peso)',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: _saveKeyModifiers,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blueGrey.shade700,
+                            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                          ),
+                          child: const Icon(Icons.save, size: 18),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -540,9 +652,7 @@ end tell
                   ? 'Receta Regex activa: Ninguna'
                   : 'Receta Regex activa: $_savedRegex',
               style: TextStyle(
-                color: _savedRegex.isEmpty
-                    ? Colors.redAccent
-                    : Colors.greenAccent,
+                color: _savedRegex.isEmpty ? Colors.redAccent : Colors.greenAccent,
                 fontStyle: FontStyle.italic,
                 fontSize: 12,
               ),
@@ -569,16 +679,11 @@ end tell
                         reverse: true,
                         itemCount: _receivedDataLog.length,
                         itemBuilder: (context, index) {
-                          final text =
-                              _receivedDataLog[_receivedDataLog.length -
-                                  1 -
-                                  index];
+                          final text = _receivedDataLog[_receivedDataLog.length - 1 - index];
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 2.0),
                             child: Text(
-                              text
-                                  .replaceAll('\r', '\\r')
-                                  .replaceAll('\n', '\\n'),
+                              text.replaceAll('\r', '\\r').replaceAll('\n', '\\n'),
                               style: const TextStyle(
                                 fontFamily: 'Courier',
                                 color: Colors.greenAccent,
