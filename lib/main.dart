@@ -158,56 +158,91 @@ class _MainScreenState extends State<MainScreen> {
   String? _decimalSeparatorFor(String value) {
     final dotIndex = value.lastIndexOf('.');
     final commaIndex = value.lastIndexOf(',');
-    if (dotIndex == -1 && commaIndex == -1) return null;
+    if (dotIndex == -1 && commaIndex == -1) {
+      return null;
+    }
     return dotIndex > commaIndex ? '.' : ',';
   }
 
   String _formatWeightForOutput(String? rawWeight) {
     final value = rawWeight?.trim() ?? '';
-    if (value.isEmpty || value == '---') return '---';
+    if (value.isEmpty || value == '---') {
+      return '---';
+    }
     final expectedDecimalSeparator = _decimalSeparatorFor(_expectedValue);
-    if (expectedDecimalSeparator == null) return value;
+    if (expectedDecimalSeparator == null) {
+      return value;
+    }
     final dotIndex = value.lastIndexOf('.');
     final commaIndex = value.lastIndexOf(',');
-    if (dotIndex == -1 && commaIndex == -1) return value;
+    if (dotIndex == -1 && commaIndex == -1) {
+      return value;
+    }
     final sourceDecimalSeparator = dotIndex > commaIndex ? '.' : ',';
     final thousandsSeparator = sourceDecimalSeparator == '.' ? ',' : '.';
     return value.replaceAll(thousandsSeparator, '').replaceAll(sourceDecimalSeparator, expectedDecimalSeparator);
   }
 
   String _parseKeysToAppleScript(String input) {
-    if (input.isEmpty) return '';
+    if (input.isEmpty) {
+      return '';
+    }
     final StringBuffer scriptBuffer = StringBuffer();
     final RegExp keyRegex = RegExp(r'(\{ENTER\}|\{TAB\}|\{SPACE\}|[^{]+)');
     final matches = keyRegex.allMatches(input);
     for (final match in matches) {
       final token = match.group(0) ?? '';
-      if (token == '{TAB}') scriptBuffer.writeln('  key code 48');
-      else if (token == '{ENTER}') scriptBuffer.writeln('  key code 36');
-      else if (token == '{SPACE}') scriptBuffer.writeln('  key code 49');
-      else scriptBuffer.writeln('  keystroke ${_appleScriptStringLiteral(token)}');
+      if (token == '{TAB}') {
+        scriptBuffer.writeln('  key code 48');
+      } else if (token == '{ENTER}') {
+        scriptBuffer.writeln('  key code 36');
+      } else if (token == '{SPACE}') {
+        scriptBuffer.writeln('  key code 49');
+      } else {
+        scriptBuffer.writeln('  keystroke ${_appleScriptStringLiteral(token)}');
+      }
     }
     return scriptBuffer.toString();
   }
 
   String _parseKeysToWindowsSendKeys(String input) {
-    if (input.isEmpty) return '';
+    if (input.isEmpty) {
+      return '';
+    }
     final StringBuffer buffer = StringBuffer();
     final RegExp keyRegex = RegExp(r'(\{ENTER\}|\{TAB\}|\{SPACE\}|[^{]+)');
     final matches = keyRegex.allMatches(input);
     for (final match in matches) {
       final token = match.group(0) ?? '';
-      if (token == '{TAB}') buffer.write('{TAB}');
-      else if (token == '{ENTER}') buffer.write('{ENTER}');
-      else if (token == '{SPACE}') buffer.write(' ');
-      else buffer.write(token.replaceAll('~', '{~}').replaceAll('+', '{+}').replaceAll('^', '{^}').replaceAll('%', '{%}').replaceAll('(', '{(}').replaceAll(')', '{(}'));
+      if (token == '{TAB}') {
+        buffer.write('{TAB}');
+      } else if (token == '{ENTER}') {
+        buffer.write('{ENTER}');
+      } else if (token == '{SPACE}') {
+        buffer.write(' ');
+      } else {
+        buffer.write(token.replaceAll('~', '{~}').replaceAll('+', '{+}').replaceAll('^', '{^}').replaceAll('%', '{%}').replaceAll('(', '{(}').replaceAll(')', '{(}'));
+      }
     }
     return buffer.toString();
   }
 
+  String _getCurrentTimestamp() {
+    final now = DateTime.now();
+    final year = now.year;
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    final second = now.second.toString().padLeft(2, '0');
+    return '$year-$month-$day $hour:$minute:$second';
+  }
+
   Future<void> _writeWeightToCursor(String weightToType) async {
-    final String currentPrefix = _prefixController.text; 
-    final String currentSuffix = _suffixController.text; 
+    final String timestampCurrent = _getCurrentTimestamp();
+    
+    final String currentPrefix = _prefixController.text.replaceAll('{AHORA}', timestampCurrent); 
+    final String currentSuffix = _suffixController.text.replaceAll('{AHORA}', timestampCurrent); 
 
     if (Platform.isMacOS) {
       try {
@@ -247,10 +282,11 @@ Start-Sleep -Milliseconds 50;
     }
   }
 
-  // --- ARQUITECTURA MAESTRA DE CONTROL DE FLUJO POR POLLING ---
   void _connect() async {
     _reconnectTimer?.cancel();
-    if (_isConnected) return;
+    if (_isConnected) {
+      return;
+    }
 
     if (mounted) {
       setState(() { _uiStatusMessage = 'Conectando a $_deviceIp:$_devicePort...'; });
@@ -265,10 +301,8 @@ Start-Sleep -Milliseconds 50;
         setState(() { _uiStatusMessage = 'Conectado. Controlando flujo activamente.'; });
       }
 
-      // 1. INICIAR EL TEMPORIZADOR DE PETICIÓN (Cada 500ms le pedimos el peso de forma controlada)
       _pollingTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
         if (_isConnected && !_isTyping) {
-          // Comando estándar industrial Giropes para solicitar el peso actual ('P') + Retorno de carro
           _socket?.write('P\r\n');
         }
       });
@@ -278,38 +312,7 @@ Start-Sleep -Milliseconds 50;
           final String chunk = utf8.decode(data, allowMalformed: true);
           _networkAccumulator += chunk;
 
-          if (_savedRegex.isNotEmpty) {
-            final regExp = RegExp(_savedRegex);
-            final match = regExp.firstMatch(_networkAccumulator);
-
-            if (match != null) {
-              final nuevoPeso = _formatWeightForOutput(match.group(0));
-              _receivedDataLog.add(_networkAccumulator);
-              if (_receivedDataLog.length > 15) _receivedDataLog.removeAt(0);
-              _networkAccumulator = ''; 
-
-              final now = DateTime.now();
-              // Evitamos duplicados en ráfaga (mínimo 1.5 segundos entre pesadas reales inyectadas)
-              if (_lastTypedTime == null || now.difference(_lastTypedTime!) > const Duration(milliseconds: 1500)) {
-                _isTyping = true;
-                _lastTypedTime = now;
-
-                if (mounted) {
-                  setState(() { _cleanWeightDisplay = nuevoPeso; });
-                }
-
-                _writeWeightToCursor(nuevoPeso).then((_) {
-                  _isTyping = false;
-                });
-                _totalPesajesExitosos++;
-                debugPrint('[POLLING EXITOSO] Muestra capturada (#$_totalPesajesExitosos): $nuevoPeso');
-              }
-            }
-          } else {
-            _receivedDataLog.add(_networkAccumulator);
-            if (_receivedDataLog.length > 15) _receivedDataLog.removeAt(0);
-            _networkAccumulator = '';
-          }
+          _processAccumulatedData();
         },
         onError: (error) {
           debugPrint('Error de Socket: $error');
@@ -322,6 +325,61 @@ Start-Sleep -Milliseconds 50;
       );
     } catch (e) {
       _handleDisconnect();
+    }
+  }
+
+  void _processAccumulatedData() async {
+    if (_networkAccumulator.isEmpty || _isTyping) {
+      return;
+    }
+
+    if (_savedRegex.isNotEmpty) {
+      final regExp = RegExp(_savedRegex);
+      final match = regExp.firstMatch(_networkAccumulator);
+
+      if (match != null) {
+        final nuevoPeso = _formatWeightForOutput(match.group(0));
+        
+        _receivedDataLog.add(_networkAccumulator);
+        if (_receivedDataLog.length > 15) {
+          _receivedDataLog.removeAt(0);
+        }
+        _networkAccumulator = ''; 
+
+        final String numericalCheck = nuevoPeso.replaceAll(RegExp(r'[^0-9.,]'), '').replaceAll(',', '.');
+        final double? parsedWeight = double.tryParse(numericalCheck);
+
+        if (parsedWeight != null && parsedWeight == 0.0) {
+          debugPrint('[FILTRO INDUSTRIAL] Lectura en cero detectada ($nuevoPeso). Se omite la inyección en Excel.');
+          if (mounted) {
+            setState(() {
+              _cleanWeightDisplay = nuevoPeso; 
+            });
+          }
+          return; 
+        }
+
+        final now = DateTime.now();
+        if (_lastTypedTime == null || now.difference(_lastTypedTime!) > const Duration(milliseconds: 1500)) {
+          _isTyping = true;
+          _lastTypedTime = now;
+
+          if (mounted) {
+            setState(() { _cleanWeightDisplay = nuevoPeso; });
+          }
+
+          await _writeWeightToCursor(nuevoPeso);
+          _totalPesajesExitosos++;
+          debugPrint('[POLLING EXITOSO] Muestra capturada (#$_totalPesajesExitosos): $nuevoPeso');
+          _isTyping = false;
+        }
+      }
+    } else {
+      _receivedDataLog.add(_networkAccumulator);
+      if (_receivedDataLog.length > 15) {
+        _receivedDataLog.removeAt(0);
+      }
+      _networkAccumulator = '';
     }
   }
 
@@ -357,6 +415,8 @@ Start-Sleep -Milliseconds 50;
 
   @override
   Widget build(BuildContext context) {
+    final bool showingConnected = _isConnected;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Pondera - Control Activo por Polling')),
       body: Padding(
@@ -384,7 +444,7 @@ Start-Sleep -Milliseconds 50;
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Comandos de Teclado (Ej: {TAB}, {ENTER}, {SPACE})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                    const Text('Comandos de Teclado (Ej: {TAB}, {ENTER}, {AHORA})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -423,15 +483,15 @@ Start-Sleep -Milliseconds 50;
                   children: [
                     Text('Dispositivo: $_deviceIp:$_devicePort', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 5),
-                    Text('Estado: $_uiStatusMessage', style: TextStyle(color: _isConnected ? Colors.green : Colors.orange, fontWeight: FontWeight.bold)),
+                    Text('Estado: $_uiStatusMessage', style: TextStyle(color: showingConnected ? Colors.green : Colors.orange, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 15),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         ElevatedButton(
-                          onPressed: _isConnected ? _disconnect : _connect,
-                          style: ElevatedButton.styleFrom(backgroundColor: _isConnected ? Colors.red.shade700 : Colors.blue.shade700),
-                          child: Text(_isConnected ? 'Desconectar' : 'Conectar Indicador'),
+                          onPressed: showingConnected ? _disconnect : _connect,
+                          style: ElevatedButton.styleFrom(backgroundColor: showingConnected ? Colors.red.shade700 : Colors.blue.shade700),
+                          child: Text(showingConnected ? 'Desconectar' : 'Conectar Indicador'),
                         ),
                         ElevatedButton(
                           onPressed: _sendToN8nIa,
