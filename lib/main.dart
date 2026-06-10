@@ -52,6 +52,25 @@ class _MainScreenState extends State<MainScreen> {
   String _uiStatusMessage = 'Desconectado';
   String _networkAccumulator = '';
 
+  // Configuración interna de Unidades de Peso
+  String _selectedInputUnit = 'kg';
+  String _selectedOutputUnit = 'kg';
+  
+  final List<String> _inputUnits = ['kg', 'lb'];
+  final List<String> _outputUnits = ['kg', 'lb', 'g', 'mg', 'oz', 't', 'qq', '@'];
+
+  // Nomenclatura industrial estándar solicitada
+  final Map<String, String> _unitLabels = {
+    'kg': 'Kg.',
+    'lb': 'Lb.',
+    'g': 'g.',
+    'mg': 'mg.',
+    'oz': 'Oz.',
+    't': 'T.',
+    'qq': 'Qq.',
+    '@': '@',
+  };
+
   late SharedPreferences _prefs;
 
   final TextEditingController _prefixController = TextEditingController();
@@ -77,6 +96,9 @@ class _MainScreenState extends State<MainScreen> {
       _savedRegex = _prefs.getString('pondera_recipe') ?? '';
       _prefixController.text = _prefs.getString('pondera_prefix') ?? '';
       _suffixController.text = _prefs.getString('pondera_suffix') ?? '';
+      _selectedInputUnit = _prefs.getString('pondera_unit_in') ?? 'kg';
+      _selectedOutputUnit = _prefs.getString('pondera_unit_out') ?? 'kg';
+
       if (_savedRegex.isNotEmpty) {
         _cleanWeightDisplay = '---';
         _uiStatusMessage = 'Listo para conectar a la balanza.';
@@ -95,6 +117,11 @@ class _MainScreenState extends State<MainScreen> {
         const SnackBar(content: Text('Comandos de teclado guardados'), duration: Duration(milliseconds: 800)),
       );
     }
+  }
+
+  void _saveUnitsConfig() async {
+    await _prefs.setString('pondera_unit_in', _selectedInputUnit);
+    await _prefs.setString('pondera_unit_out', _selectedOutputUnit);
   }
 
   void _sendToN8nIa() async {
@@ -183,6 +210,38 @@ class _MainScreenState extends State<MainScreen> {
     return value.replaceAll(thousandsSeparator, '').replaceAll(sourceDecimalSeparator, expectedDecimalSeparator);
   }
 
+  double _convertWeight(double inputWeight, String fromUnit, String toUnit) {
+    if (fromUnit == toUnit) return inputWeight;
+
+    double weightInKg = 0.0;
+    if (fromUnit == 'kg') {
+      weightInKg = inputWeight;
+    } else if (fromUnit == 'lb') {
+      weightInKg = inputWeight * 0.45359237;
+    }
+
+    switch (toUnit) {
+      case 'kg':
+        return weightInKg;
+      case 'lb':
+        return weightInKg / 0.45359237;
+      case 'g':
+        return weightInKg * 1000.0;
+      case 'mg':
+        return weightInKg * 1000000.0;
+      case 'oz':
+        return weightInKg * 35.27396195;
+      case 't':
+        return weightInKg / 1000.0;
+      case 'qq': 
+        return (weightInKg / 0.45359237) / 100.0;
+      case '@':  
+        return (weightInKg / 0.45359237) / 25.0;
+      default:
+        return weightInKg;
+    }
+  }
+
   String _parseKeysToAppleScript(String input) {
     if (input.isEmpty) {
       return '';
@@ -194,12 +253,16 @@ class _MainScreenState extends State<MainScreen> {
       final token = match.group(0) ?? '';
       if (token == '{TAB}') {
         scriptBuffer.writeln('  key code 48');
+        scriptBuffer.writeln('  delay 0.05');
       } else if (token == '{ENTER}') {
         scriptBuffer.writeln('  key code 36');
+        scriptBuffer.writeln('  delay 0.05');
       } else if (token == '{SPACE}') {
         scriptBuffer.writeln('  key code 49');
+        scriptBuffer.writeln('  delay 0.05');
       } else {
         scriptBuffer.writeln('  keystroke ${_appleScriptStringLiteral(token)}');
+        scriptBuffer.writeln('  delay 0.05');
       }
     }
     return scriptBuffer.toString();
@@ -247,19 +310,21 @@ class _MainScreenState extends State<MainScreen> {
     if (Platform.isMacOS) {
       try {
         await Clipboard.setData(ClipboardData(text: weightToType));
+        
         final String prefixScript = _parseKeysToAppleScript(currentPrefix);
         final String suffixScript = _parseKeysToAppleScript(currentSuffix);
-        
-        // CORRECCIÓN: Pasamos el script usando standard input (stdin) en lugar de argumentos en línea de comandos. 
-        // Esto evita que Bash o Zsh eliminen o alteren los espacios en blanco de las variables de AppleScript.
         final process = await Process.start('osascript', []);
+        
         final String fullScript = '''
 tell application "System Events"
 $prefixScript
+  delay 0.1
   keystroke "v" using {command down}
+  delay 0.1
 $suffixScript
 end tell
 ''';
+        
         process.stdin.write(fullScript);
         await process.stdin.close();
         await process.exitCode.timeout(const Duration(seconds: 2));
@@ -343,7 +408,7 @@ Start-Sleep -Milliseconds 50;
       final match = regExp.firstMatch(_networkAccumulator);
 
       if (match != null) {
-        final nuevoPeso = _formatWeightForOutput(match.group(0));
+        final nuevoPesoOriginal = _formatWeightForOutput(match.group(0));
         
         _receivedDataLog.add(_networkAccumulator);
         if (_receivedDataLog.length > 15) {
@@ -351,17 +416,25 @@ Start-Sleep -Milliseconds 50;
         }
         _networkAccumulator = ''; 
 
-        final String numericalCheck = nuevoPeso.replaceAll(RegExp(r'[^0-9.,]'), '').replaceAll(',', '.');
+        final String numericalCheck = nuevoPesoOriginal.replaceAll(RegExp(r'[^0-9.,]'), '').replaceAll(',', '.');
         final double? parsedWeight = double.tryParse(numericalCheck);
 
         if (parsedWeight != null && parsedWeight == 0.0) {
-          debugPrint('[FILTRO INDUSTRIAL] Lectura en cero detectada ($nuevoPeso). Se omite la inyección en Excel.');
           if (mounted) {
             setState(() {
-              _cleanWeightDisplay = nuevoPeso; 
+              String labelIn = _unitLabels[_selectedInputUnit] ?? _selectedInputUnit;
+              _cleanWeightDisplay = '$nuevoPesoOriginal $labelIn'; 
             });
           }
           return; 
+        }
+
+        String pesoFinalAInyectar = nuevoPesoOriginal;
+        if (parsedWeight != null) {
+          final double valorConvertido = _convertWeight(parsedWeight, _selectedInputUnit, _selectedOutputUnit);
+          final int decimalesOrigen = numericalCheck.contains('.') ? numericalCheck.split('.')[1].length : 2;
+          String valorString = valorConvertido.toStringAsFixed(decimalesOrigen);
+          pesoFinalAInyectar = _formatWeightForOutput(valorString);
         }
 
         final now = DateTime.now();
@@ -370,12 +443,14 @@ Start-Sleep -Milliseconds 50;
           _lastTypedTime = now;
 
           if (mounted) {
-            setState(() { _cleanWeightDisplay = nuevoPeso; });
+            setState(() { 
+              String labelOut = _unitLabels[_selectedOutputUnit] ?? _selectedOutputUnit;
+              _cleanWeightDisplay = '$pesoFinalAInyectar $labelOut'; 
+            });
           }
 
-          await _writeWeightToCursor(nuevoPeso);
+          await _writeWeightToCursor(pesoFinalAInyectar);
           _totalPesajesExitosos++;
-          debugPrint('[POLLING EXITOSO] Muestra capturada (#$_totalPesajesExitosos): $nuevoPeso');
           _isTyping = false;
         }
       }
@@ -435,9 +510,57 @@ Start-Sleep -Milliseconds 50;
                 padding: const EdgeInsets.all(15.0),
                 child: Column(
                   children: [
-                    const Text('PESO LIMPIO FILTRADO LOCALMENTE', style: TextStyle(fontSize: 12, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                    const Text('PESO FILTRADO Y CONVERTIDO EN PONDERA', style: TextStyle(fontSize: 12, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 5),
                     Text(_cleanWeightDisplay, style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Configuración de Unidades de Medida', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: _selectedInputUnit,
+                            decoration: const InputDecoration(labelText: 'Origen Balanza', border: OutlineInputBorder(), isDense: true),
+                            items: _inputUnits.map((unit) {
+                              return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
+                            }).toList(),
+                            onChanged: (val) {
+                              setState(() {
+                                _selectedInputUnit = val ?? 'kg';
+                                _saveUnitsConfig();
+                              });
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 15),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: _selectedOutputUnit,
+                            decoration: const InputDecoration(labelText: 'Destino Escritura', border: OutlineInputBorder(), isDense: true),
+                            items: _outputUnits.map((unit) {
+                              return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
+                            }).toList(),
+                            onChanged: (val) {
+                              setState(() {
+                                _selectedOutputUnit = val ?? 'kg';
+                                _saveUnitsConfig();
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
