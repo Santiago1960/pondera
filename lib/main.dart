@@ -33,7 +33,6 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   final String _deviceIp = '192.168.100.134';
   final int _devicePort = 3004;
-
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook-test/pondera-recipe';
   final String _expectedValue = '0.130';
 
@@ -55,7 +54,6 @@ class _MainScreenState extends State<MainScreen> {
   // Configuración interna de Unidades de Peso
   String _selectedInputUnit = 'kg';
   String _selectedOutputUnit = 'kg';
-  
   final List<String> _inputUnits = ['kg', 'lb'];
   final List<String> _outputUnits = ['kg', 'lb', 'g', 'mg', 'oz', 't', 'qq', '@'];
 
@@ -70,7 +68,6 @@ class _MainScreenState extends State<MainScreen> {
     'qq': 'Qq.',
     '@': '@',
   };
-
   late SharedPreferences _prefs;
 
   final TextEditingController _prefixController = TextEditingController();
@@ -141,7 +138,6 @@ class _MainScreenState extends State<MainScreen> {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'trama': rawData, 'valor_esperado': _expectedValue}),
       );
-
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
         String newRegex = responseData['regex_pattern'] ?? '';
@@ -212,7 +208,6 @@ class _MainScreenState extends State<MainScreen> {
 
   double _convertWeight(double inputWeight, String fromUnit, String toUnit) {
     if (fromUnit == toUnit) return inputWeight;
-
     double weightInKg = 0.0;
     if (fromUnit == 'kg') {
       weightInKg = inputWeight;
@@ -310,11 +305,9 @@ class _MainScreenState extends State<MainScreen> {
     if (Platform.isMacOS) {
       try {
         await Clipboard.setData(ClipboardData(text: weightToType));
-        
         final String prefixScript = _parseKeysToAppleScript(currentPrefix);
         final String suffixScript = _parseKeysToAppleScript(currentSuffix);
         final process = await Process.start('osascript', []);
-        
         final String fullScript = '''
 tell application "System Events"
 $prefixScript
@@ -324,7 +317,6 @@ $prefixScript
 $suffixScript
 end tell
 ''';
-        
         process.stdin.write(fullScript);
         await process.stdin.close();
         await process.exitCode.timeout(const Duration(seconds: 2));
@@ -335,17 +327,26 @@ end tell
 
     if (Platform.isWindows) {
       try {
-        final escapedWeight = _powershellStringLiteral(weightToType);
+        // 1. Copiar el valor numérico al portapapeles de Windows
+        await Clipboard.setData(ClipboardData(text: weightToType));
+
+        // 2. Parsear prefijos y sufijos de teclas especiales de la UI
         final winPrefix = _parseKeysToWindowsSendKeys(currentPrefix);
         final winSuffix = _parseKeysToWindowsSendKeys(currentSuffix);
-        final escapedSequence = _powershellStringLiteral('$winPrefix^v$winSuffix');
+
+        // 3. Estructurar la secuencia unificada. El comando nativo para pegar en SendKeys es '^v'
+        final fullSequence = '$winPrefix^v$winSuffix';
+        final cleanSequence = fullSequence.replaceAll('"', '`"');
+
+        // 4. Inyección a través del Shell COM de Windows (evita pérdida de foco en la UI)
         final psScript = '''
 Add-Type -AssemblyName System.Windows.Forms;
-Set-Clipboard -Value "$escapedWeight";
-Start-Sleep -Milliseconds 50;
-[System.Windows.Forms.SendKeys]::SendWait("$escapedSequence");
+\$wshell = New-Object -ComObject WScript.Shell;
+Start-Sleep -Milliseconds 60;
+[System.Windows.Forms.SendKeys]::SendWait("$cleanSequence");
 ''';
-        await Process.run('powershell', ['-Command', psScript]).timeout(const Duration(seconds: 3));
+
+        await Process.run('powershell', ['-NoProfile', '-Command', psScript]).timeout(const Duration(seconds: 3));
       } catch (e) {
         debugPrint('Error en Windows SendKeys: $e');
       }
@@ -406,7 +407,6 @@ Start-Sleep -Milliseconds 50;
     if (_savedRegex.isNotEmpty) {
       final regExp = RegExp(_savedRegex);
       final match = regExp.firstMatch(_networkAccumulator);
-
       if (match != null) {
         final nuevoPesoOriginal = _formatWeightForOutput(match.group(0));
         
@@ -426,7 +426,7 @@ Start-Sleep -Milliseconds 50;
               _cleanWeightDisplay = '$nuevoPesoOriginal $labelIn'; 
             });
           }
-          return; 
+          return;
         }
 
         String pesoFinalAInyectar = nuevoPesoOriginal;
@@ -496,7 +496,6 @@ Start-Sleep -Milliseconds 50;
   @override
   Widget build(BuildContext context) {
     final bool showingConnected = _isConnected;
-
     return Scaffold(
       appBar: AppBar(title: const Text('Pondera - Control Activo por Polling')),
       body: Padding(
