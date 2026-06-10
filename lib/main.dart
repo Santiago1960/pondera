@@ -31,8 +31,9 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  final String _deviceIp = '192.168.100.134';
-  final int _devicePort = 3004;
+  // Los datos quemados ahora actúan únicamente como fallbacks por defecto
+  String _deviceIp = '192.168.100.134';
+  int _devicePort = 3004;
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook-test/pondera-recipe';
   final String _expectedValue = '0.130';
 
@@ -70,6 +71,9 @@ class _MainScreenState extends State<MainScreen> {
   };
   late SharedPreferences _prefs;
 
+  // Controladores para la interfaz de usuario
+  final TextEditingController _ipController = TextEditingController();
+  final TextEditingController _portController = TextEditingController();
   final TextEditingController _prefixController = TextEditingController();
   final TextEditingController _suffixController = TextEditingController();
 
@@ -82,6 +86,8 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void dispose() {
     _disconnect();
+    _ipController.dispose();
+    _portController.dispose();
     _prefixController.dispose();
     _suffixController.dispose();
     super.dispose();
@@ -90,6 +96,12 @@ class _MainScreenState extends State<MainScreen> {
   void _initSharedPreferences() async {
     _prefs = await SharedPreferences.getInstance();
     setState(() {
+      // Carga de configuración de red compartida
+      _deviceIp = _prefs.getString('pondera_ip') ?? '192.168.100.134';
+      _devicePort = _prefs.getInt('pondera_port') ?? 3004;
+      _ipController.text = _deviceIp;
+      _portController.text = _devicePort.toString();
+
       _savedRegex = _prefs.getString('pondera_recipe') ?? '';
       _prefixController.text = _prefs.getString('pondera_prefix') ?? '';
       _suffixController.text = _prefs.getString('pondera_suffix') ?? '';
@@ -103,6 +115,31 @@ class _MainScreenState extends State<MainScreen> {
         _cleanWeightDisplay = 'Sin receta';
       }
     });
+  }
+
+  void _saveNetworkConfig() async {
+    final int? parsedPort = int.tryParse(_portController.text);
+    if (parsedPort == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Puerto inválido')),
+      );
+      return;
+    }
+
+    setState(() {
+      _deviceIp = _ipController.text.trim();
+      _devicePort = parsedPort;
+    });
+
+    await _prefs.setString('pondera_ip', _deviceIp);
+    await _prefs.setInt('pondera_port', _devicePort);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Configuración de red guardada'), duration: Duration(milliseconds: 800)),
+      );
+    }
   }
 
   void _saveKeyModifiers() async {
@@ -327,18 +364,14 @@ end tell
 
     if (Platform.isWindows) {
       try {
-        // 1. Copiar el valor numérico al portapapeles de Windows
         await Clipboard.setData(ClipboardData(text: weightToType));
 
-        // 2. Parsear prefijos y sufijos de teclas especiales de la UI
         final winPrefix = _parseKeysToWindowsSendKeys(currentPrefix);
         final winSuffix = _parseKeysToWindowsSendKeys(currentSuffix);
 
-        // 3. Estructurar la secuencia unificada. El comando nativo para pegar en SendKeys es '^v'
         final fullSequence = '$winPrefix^v$winSuffix';
         final cleanSequence = fullSequence.replaceAll('"', '`"');
 
-        // 4. Inyección a través del Shell COM de Windows (evita pérdida de foco en la UI)
         final psScript = '''
 Add-Type -AssemblyName System.Windows.Forms;
 \$wshell = New-Object -ComObject WScript.Shell;
@@ -404,16 +437,21 @@ Start-Sleep -Milliseconds 60;
       return;
     }
 
+    // Agregar la trama en bruto recibida al log para despliegue en pantalla
+    if (mounted) {
+      setState(() {
+        _receivedDataLog.add(_networkAccumulator);
+        if (_receivedDataLog.length > 25) {
+          _receivedDataLog.removeAt(0);
+        }
+      });
+    }
+
     if (_savedRegex.isNotEmpty) {
       final regExp = RegExp(_savedRegex);
       final match = regExp.firstMatch(_networkAccumulator);
       if (match != null) {
         final nuevoPesoOriginal = _formatWeightForOutput(match.group(0));
-        
-        _receivedDataLog.add(_networkAccumulator);
-        if (_receivedDataLog.length > 15) {
-          _receivedDataLog.removeAt(0);
-        }
         _networkAccumulator = ''; 
 
         final String numericalCheck = nuevoPesoOriginal.replaceAll(RegExp(r'[^0-9.,]'), '').replaceAll(',', '.');
@@ -455,10 +493,6 @@ Start-Sleep -Milliseconds 60;
         }
       }
     } else {
-      _receivedDataLog.add(_networkAccumulator);
-      if (_receivedDataLog.length > 15) {
-        _receivedDataLog.removeAt(0);
-      }
       _networkAccumulator = '';
     }
   }
@@ -512,6 +546,49 @@ Start-Sleep -Milliseconds 60;
                     const Text('PESO FILTRADO Y CONVERTIDO EN PONDERA', style: TextStyle(fontSize: 12, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 5),
                     Text(_cleanWeightDisplay, style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.amberAccent)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            // NUEVO CARD: Configuración dinámica de IP y Puerto de Red del Indicador
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Configuración de Enlace de Red (Balanza Industrial)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: _ipController,
+                            decoration: const InputDecoration(labelText: 'Dirección IP', border: OutlineInputBorder(), isDense: true),
+                            style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          flex: 2,
+                          child: TextField(
+                            controller: _portController,
+                            decoration: const InputDecoration(labelText: 'Puerto', border: OutlineInputBorder(), isDense: true),
+                            style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                            keyboardType: TextInputType.number,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: _saveNetworkConfig,
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade700, padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12)),
+                          child: const Icon(Icons.save_sharp, size: 18),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -608,7 +685,7 @@ Start-Sleep -Milliseconds 60;
                 padding: const EdgeInsets.all(15.0),
                 child: Column(
                   children: [
-                    Text('Dispositivo: $_deviceIp:$_devicePort', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                    Text('Dispositivo de destino activo: $_deviceIp:$_devicePort', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70)),
                     const SizedBox(height: 5),
                     Text('Estado: $_uiStatusMessage', style: TextStyle(color: showingConnected ? Colors.green : Colors.orange, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 15),
@@ -638,13 +715,30 @@ Start-Sleep -Milliseconds 60;
             const SizedBox(height: 15),
             const Text('Tramas recibidas en bruto (Data Log):', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
+            // RESTAURADO: Visor optimizado mediante ListView.builder para estabilidad absoluta del flujo
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.grey.shade800)),
-                child: const Center(
-                  child: Text('Log de tramas ocultado para estabilidad absoluta del flujo.', style: TextStyle(color: Colors.white54)),
-                ),
+                child: _receivedDataLog.isEmpty
+                    ? const Center(
+                        child: Text('Esperando datos de la balanza...', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                      )
+                    : ListView.builder(
+                        itemCount: _receivedDataLog.length,
+                        reverse: true, // Muestra las tramas más nuevas al principio del log
+                        itemBuilder: (context, index) {
+                          // Invierte el índice para mantener la lectura lógica al usar reverse
+                          final logEntry = _receivedDataLog[_receivedDataLog.length - 1 - index];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2.0),
+                            child: Text(
+                              logEntry.replaceAll('\r', '\\r').replaceAll('\n', '\\n'),
+                              style: const TextStyle(color: Colors.green, fontFamily: 'Courier', fontSize: 12),
+                            ),
+                          );
+                        },
+                      ),
               ),
             ),
           ],
