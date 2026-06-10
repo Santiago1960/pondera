@@ -249,15 +249,20 @@ class _MainScreenState extends State<MainScreen> {
         await Clipboard.setData(ClipboardData(text: weightToType));
         final String prefixScript = _parseKeysToAppleScript(currentPrefix);
         final String suffixScript = _parseKeysToAppleScript(currentSuffix);
-        final script = '''
-delay 0.01
+        
+        // CORRECCIÓN: Pasamos el script usando standard input (stdin) en lugar de argumentos en línea de comandos. 
+        // Esto evita que Bash o Zsh eliminen o alteren los espacios en blanco de las variables de AppleScript.
+        final process = await Process.start('osascript', []);
+        final String fullScript = '''
 tell application "System Events"
 $prefixScript
   keystroke "v" using {command down}
 $suffixScript
 end tell
 ''';
-        await Process.run('osascript', ['-e', script]).timeout(const Duration(seconds: 2));
+        process.stdin.write(fullScript);
+        await process.stdin.close();
+        await process.exitCode.timeout(const Duration(seconds: 2));
       } catch (e) {
         debugPrint('Error en Mac keystroke: $e');
       }
@@ -444,7 +449,7 @@ Start-Sleep -Milliseconds 50;
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Comandos de Teclado (Ej: {TAB}, {ENTER}, {AHORA})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                    const Text('Comandos de Teclado (Ej: {TAB}, {ENTER}, {SPACE}, {AHORA})', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
                     const SizedBox(height: 8),
                     Row(
                       children: [
