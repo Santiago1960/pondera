@@ -31,7 +31,6 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  // Los datos quemados ahora actúan únicamente como fallbacks por defecto
   String _deviceIp = '192.168.100.134';
   int _devicePort = 3004;
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook-test/pondera-recipe';
@@ -43,7 +42,6 @@ class _MainScreenState extends State<MainScreen> {
   bool _isConnected = false;
   bool _isTyping = false;
 
-  //int _totalPesajesExitosos = 0;
   DateTime? _lastTypedTime;
   final List<String> _receivedDataLog = [];
 
@@ -52,13 +50,11 @@ class _MainScreenState extends State<MainScreen> {
   String _uiStatusMessage = 'Desconectado';
   String _networkAccumulator = '';
 
-  // Configuración interna de Unidades de Peso
   String _selectedInputUnit = 'kg';
   String _selectedOutputUnit = 'kg';
   final List<String> _inputUnits = ['kg', 'lb'];
   final List<String> _outputUnits = ['kg', 'lb', 'g', 'mg', 'oz', 't', 'qq', '@'];
 
-  // Nomenclatura industrial estándar solicitada
   final Map<String, String> _unitLabels = {
     'kg': 'Kg.',
     'lb': 'Lb.',
@@ -71,7 +67,6 @@ class _MainScreenState extends State<MainScreen> {
   };
   late SharedPreferences _prefs;
 
-  // Controladores para la interfaz de usuario
   final TextEditingController _ipController = TextEditingController();
   final TextEditingController _portController = TextEditingController();
   final TextEditingController _prefixController = TextEditingController();
@@ -96,7 +91,6 @@ class _MainScreenState extends State<MainScreen> {
   void _initSharedPreferences() async {
     _prefs = await SharedPreferences.getInstance();
     setState(() {
-      // Carga de configuración de red compartida
       _deviceIp = _prefs.getString('pondera_ip') ?? '192.168.100.134';
       _devicePort = _prefs.getInt('pondera_port') ?? 3004;
       _ipController.text = _deviceIp;
@@ -210,10 +204,6 @@ class _MainScreenState extends State<MainScreen> {
   String _appleScriptStringLiteral(String value) {
     return '"${value.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
   }
-
-  /* String _powershellStringLiteral(String value) {
-    return value.replaceAll('`', '``').replaceAll('"', '`"').replaceAll('\$', '`\$');
-  } */
 
   String? _decimalSeparatorFor(String value) {
     final dotIndex = value.lastIndexOf('.');
@@ -362,26 +352,26 @@ end tell
       }
     }
 
-    if (Platform.isWindows) {
+        if (Platform.isWindows) {
       try {
+        // 1. Copiamos el peso en el portapapeles
         await Clipboard.setData(ClipboardData(text: weightToType));
 
+        // 2. Procesamos prefijos y sufijos en formato SendKeys
         final winPrefix = _parseKeysToWindowsSendKeys(currentPrefix);
         final winSuffix = _parseKeysToWindowsSendKeys(currentSuffix);
+        final fullSequence = '$winPrefix^v$winSuffix'; // ^v ejecuta el pegado físico (Ctrl+V)
 
-        final fullSequence = '$winPrefix^v$winSuffix';
-        final cleanSequence = fullSequence.replaceAll('"', '`"');
+        // 3. Ejecutamos la inyección usando el motor nativo de Windows (mshta) vía CMD
+        // Esto esquiva por completo las restricciones de seguridad y directivas de Windows 11
+        await Process.run('cmd', [
+          '/c',
+          'mshta vbscript:CreateObject("WScript.Shell").SendKeys("$fullSequence")(window.close)'
+        ]).timeout(const Duration(seconds: 2));
 
-        final psScript = '''
-Add-Type -AssemblyName System.Windows.Forms;
-\$wshell = New-Object -ComObject WScript.Shell;
-Start-Sleep -Milliseconds 60;
-[System.Windows.Forms.SendKeys]::SendWait("$cleanSequence");
-''';
-
-        await Process.run('powershell', ['-NoProfile', '-Command', psScript]).timeout(const Duration(seconds: 3));
+        debugPrint('Inyección por comando nativo completada con éxito.');
       } catch (e) {
-        debugPrint('Error en Windows SendKeys: $e');
+        debugPrint('Error en inyección CMD: $e');
       }
     }
   }
@@ -437,7 +427,6 @@ Start-Sleep -Milliseconds 60;
       return;
     }
 
-    // Agregar la trama en bruto recibida al log para despliegue en pantalla
     if (mounted) {
       setState(() {
         _receivedDataLog.add(_networkAccumulator);
@@ -488,7 +477,6 @@ Start-Sleep -Milliseconds 60;
           }
 
           await _writeWeightToCursor(pesoFinalAInyectar);
-          //_totalPesajesExitosos++;
           _isTyping = false;
         }
       }
@@ -551,7 +539,6 @@ Start-Sleep -Milliseconds 60;
               ),
             ),
             const SizedBox(height: 10),
-            // NUEVO CARD: Configuración dinámica de IP y Puerto de Red del Indicador
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(12.0),
@@ -606,7 +593,7 @@ Start-Sleep -Milliseconds 60;
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue: _selectedInputUnit,
+                            value: _selectedInputUnit,
                             decoration: const InputDecoration(labelText: 'Origen Balanza', border: OutlineInputBorder(), isDense: true),
                             items: _inputUnits.map((unit) {
                               return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
@@ -622,7 +609,7 @@ Start-Sleep -Milliseconds 60;
                         const SizedBox(width: 15),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue: _selectedOutputUnit,
+                            value: _selectedOutputUnit,
                             decoration: const InputDecoration(labelText: 'Destino Escritura', border: OutlineInputBorder(), isDense: true),
                             items: _outputUnits.map((unit) {
                               return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
@@ -715,7 +702,6 @@ Start-Sleep -Milliseconds 60;
             const SizedBox(height: 15),
             const Text('Tramas recibidas en bruto (Data Log):', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
-            // RESTAURADO: Visor optimizado mediante ListView.builder para estabilidad absoluta del flujo
             Expanded(
               child: Container(
                 padding: const EdgeInsets.all(10),
@@ -726,9 +712,8 @@ Start-Sleep -Milliseconds 60;
                       )
                     : ListView.builder(
                         itemCount: _receivedDataLog.length,
-                        reverse: true, // Muestra las tramas más nuevas al principio del log
+                        reverse: true,
                         itemBuilder: (context, index) {
-                          // Invierte el índice para mantener la lectura lógica al usar reverse
                           final logEntry = _receivedDataLog[_receivedDataLog.length - 1 - index];
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 2.0),
