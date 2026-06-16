@@ -494,11 +494,12 @@ end tell
     final bool showingConnected = _isConnected;
     return Scaffold(
       appBar: AppBar(title: const Text('Pondera - Control Activo por Polling')),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+      body: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
             Card(
               color: Colors.blueGrey.shade900,
               child: Padding(
@@ -676,7 +677,8 @@ end tell
             const SizedBox(height: 15),
             const Text('Tramas recibidas en bruto (Data Log):', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
-            Expanded(
+            SizedBox(
+              height: 260,
               child: Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(5), border: Border.all(color: Colors.grey.shade800)),
@@ -701,6 +703,7 @@ end tell
               ),
             ),
           ],
+          ),
         ),
       ),
     );
