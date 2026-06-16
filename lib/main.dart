@@ -51,6 +51,11 @@ class _MainScreenState extends State<MainScreen> {
   String _cleanWeightDisplay = '---';
   String _uiStatusMessage = 'Desconectado';
   String _networkAccumulator = '';
+  String _networkDiagnostics = 'Sin actividad de red.';
+  String _n8nDiagnostics = 'n8n: sin petición enviada.';
+  int _pollRequestsSent = 0;
+  int _bytesReceived = 0;
+  bool _isPollingIndicator = false;
 
   String _selectedInputUnit = 'kg';
   String _selectedOutputUnit = 'kg';
@@ -162,7 +167,10 @@ class _MainScreenState extends State<MainScreen> {
     String rawData = _receivedDataLog.last;
     
     if (mounted) {
-      setState(() { _uiStatusMessage = 'Enviando muestra a n8n...'; });
+      setState(() {
+        _uiStatusMessage = 'Enviando muestra a n8n...';
+        _n8nDiagnostics = 'n8n: enviando POST a $_n8nUrl';
+      });
     }
 
     try {
@@ -170,9 +178,40 @@ class _MainScreenState extends State<MainScreen> {
         Uri.parse(_n8nUrl),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'trama': rawData, 'valor_esperado': _expectedValue}),
-      );
+      ).timeout(const Duration(seconds: 12));
+
+      final String responsePreview = response.body.length > 180
+          ? '${response.body.substring(0, 180)}...'
+          : response.body;
+
+      if (mounted) {
+        setState(() {
+          _n8nDiagnostics = 'n8n: HTTP ${response.statusCode}. Respuesta: $responsePreview';
+        });
+      }
+
       if (response.statusCode == 200) {
-        final responseData = jsonDecode(response.body);
+        dynamic responseData;
+        try {
+          responseData = jsonDecode(response.body);
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _uiStatusMessage = 'n8n respondió 200, pero no envió JSON válido.';
+              _n8nDiagnostics = 'n8n: JSON inválido. Respuesta: $responsePreview';
+            });
+          }
+          return;
+        }
+        if (responseData is! Map<String, dynamic>) {
+          if (mounted) {
+            setState(() {
+              _uiStatusMessage = 'n8n respondió 200, pero el JSON no es un objeto.';
+              _n8nDiagnostics = 'n8n: estructura inesperada. Respuesta: $responsePreview';
+            });
+          }
+          return;
+        }
         String newRegex = responseData['regex_pattern'] ?? '';
         if (newRegex.isNotEmpty) {
           await _prefs.setString('pondera_recipe', newRegex);
@@ -187,10 +226,24 @@ class _MainScreenState extends State<MainScreen> {
               }
             });
           }
+        } else if (mounted) {
+          setState(() {
+            _uiStatusMessage = 'n8n respondió 200, pero no devolvió regex_pattern.';
+          });
         }
+      } else if (mounted) {
+        setState(() {
+          _uiStatusMessage = 'n8n respondió HTTP ${response.statusCode}.';
+        });
       }
     } catch (e) {
       debugPrint('Error de conexión con n8n: $e');
+      if (mounted) {
+        setState(() {
+          _uiStatusMessage = 'Error de conexión con n8n.';
+          _n8nDiagnostics = 'n8n: error enviando POST: $e';
+        });
+      }
     }
   }
 
@@ -357,21 +410,44 @@ end tell
     }
 
     if (mounted) {
-      setState(() { _uiStatusMessage = 'Conectando a $_deviceIp:$_devicePort...'; });
+      setState(() {
+        _uiStatusMessage = 'Conectando a $_deviceIp:$_devicePort...';
+        _networkDiagnostics = 'Intentando abrir socket TCP...';
+      });
     }
 
     try {
       _socket = await Socket.connect(_deviceIp, _devicePort, timeout: const Duration(seconds: 4));
       _isConnected = true;
       _networkAccumulator = '';
+      _pollRequestsSent = 0;
+      _bytesReceived = 0;
 
       if (mounted) {
-        setState(() { _uiStatusMessage = 'Conectado. Controlando flujo activamente.'; });
+        setState(() {
+          _uiStatusMessage = 'Conectado. Controlando flujo activamente.';
+          _networkDiagnostics = 'Socket conectado. Esperando respuesta del indicador...';
+        });
       }
 
-      _pollingTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
-        if (_isConnected && !_isTyping) {
-          _socket?.write('P\r\n');
+      _pollingTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) async {
+        if (_isConnected && !_isTyping && !_isPollingIndicator) {
+          _isPollingIndicator = true;
+          try {
+            _socket?.write('P\r\n');
+            await _socket?.flush();
+            _pollRequestsSent++;
+            if (mounted) {
+              setState(() {
+                _networkDiagnostics = 'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived';
+              });
+            }
+          } catch (e) {
+            debugPrint('Error enviando polling: $e');
+            _handleDisconnect('Error enviando polling: $e');
+          } finally {
+            _isPollingIndicator = false;
+          }
         }
       });
 
@@ -379,20 +455,27 @@ end tell
         (List<int> data) {
           final String chunk = utf8.decode(data, allowMalformed: true);
           _networkAccumulator += chunk;
+          _bytesReceived += data.length;
+
+          if (mounted) {
+            setState(() {
+              _networkDiagnostics = 'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived | Último bloque: ${data.length} bytes';
+            });
+          }
 
           _processAccumulatedData();
         },
         onError: (error) {
           debugPrint('Error de Socket: $error');
-          _handleDisconnect();
+          _handleDisconnect('Error de Socket: $error');
         },
         onDone: () {
-          _handleDisconnect();
+          _handleDisconnect('Conexión cerrada por el indicador.');
         },
         cancelOnError: true,
       );
     } catch (e) {
-      _handleDisconnect();
+      _handleDisconnect('No se pudo conectar: $e');
     }
   }
 
@@ -459,14 +542,18 @@ end tell
     }
   }
 
-  void _handleDisconnect() {
+  void _handleDisconnect([String reason = 'Fuera de línea. Reintentando...']) {
     _pollingTimer?.cancel();
     _isConnected = false;
+    _isPollingIndicator = false;
     _socket?.destroy();
     _socket = null;
     
     if (mounted) {
-      setState(() { _uiStatusMessage = 'Fuera de línea. Reintentando...'; });
+      setState(() {
+        _uiStatusMessage = reason;
+        _networkDiagnostics = 'Desconectado. $reason | Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived';
+      });
     }
 
     _reconnectTimer?.cancel();
@@ -485,6 +572,7 @@ end tell
       setState(() {
         _uiStatusMessage = 'Desconectado';
         _cleanWeightDisplay = '---';
+        _networkDiagnostics = 'Sin actividad de red.';
       });
     }
   }
@@ -650,6 +738,10 @@ end tell
                     Text('Dispositivo de destino activo: $_deviceIp:$_devicePort', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70)),
                     const SizedBox(height: 5),
                     Text('Estado: $_uiStatusMessage', style: TextStyle(color: showingConnected ? Colors.green : Colors.orange, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 5),
+                    Text(_networkDiagnostics, style: const TextStyle(fontSize: 12, color: Colors.white60)),
+                    const SizedBox(height: 5),
+                    Text(_n8nDiagnostics, style: const TextStyle(fontSize: 12, color: Colors.white60)),
                     const SizedBox(height: 15),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
