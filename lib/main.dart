@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:flutter/services.dart';
 
 void main() {
@@ -37,6 +38,7 @@ class _MainScreenState extends State<MainScreen> {
   int _devicePort = 3004;
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook-test/pondera-recipe';
   final String _expectedValue = '0.130';
+  final bool _allowUntrustedN8nCertificateFallback = true;
 
   Socket? _socket;
   Timer? _pollingTimer;
@@ -56,6 +58,7 @@ class _MainScreenState extends State<MainScreen> {
   int _pollRequestsSent = 0;
   int _bytesReceived = 0;
   bool _isPollingIndicator = false;
+  bool _lastN8nRequestUsedUntrustedCertificate = false;
 
   String _selectedInputUnit = 'kg';
   String _selectedOutputUnit = 'kg';
@@ -159,6 +162,48 @@ class _MainScreenState extends State<MainScreen> {
     await _prefs.setString('pondera_unit_out', _selectedOutputUnit);
   }
 
+  bool _isCertificateTrustError(Object error) {
+    final message = error.toString();
+    return message.contains('CERTIFICATE_VERIFY_FAILED') ||
+        message.contains('unable to get local issuer certificate');
+  }
+
+  Future<http.Response> _postToN8n(String rawData) async {
+    final uri = Uri.parse(_n8nUrl);
+    final headers = {'Content-Type': 'application/json'};
+    final body = jsonEncode({'trama': rawData, 'valor_esperado': _expectedValue});
+    _lastN8nRequestUsedUntrustedCertificate = false;
+
+    try {
+      return await http.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 12));
+    } on HandshakeException catch (e) {
+      if (!_allowUntrustedN8nCertificateFallback || !_isCertificateTrustError(e)) {
+        rethrow;
+      }
+
+      if (mounted) {
+        setState(() {
+          _n8nDiagnostics = 'n8n: certificado no confiable detectado. Reintentando solo para ${uri.host}...';
+        });
+      }
+
+      final expectedPort = uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
+      final httpClient = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 12)
+        ..badCertificateCallback = (certificate, host, port) {
+          return host == uri.host && port == expectedPort;
+        };
+      final client = IOClient(httpClient);
+      try {
+        final response = await client.post(uri, headers: headers, body: body).timeout(const Duration(seconds: 12));
+        _lastN8nRequestUsedUntrustedCertificate = true;
+        return response;
+      } finally {
+        client.close();
+      }
+    }
+  }
+
   void _sendToN8nIa() async {
     if (_receivedDataLog.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Primero captura una trama.')));
@@ -174,11 +219,7 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     try {
-      final response = await http.post(
-        Uri.parse(_n8nUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'trama': rawData, 'valor_esperado': _expectedValue}),
-      ).timeout(const Duration(seconds: 12));
+      final response = await _postToN8n(rawData);
 
       final String responsePreview = response.body.length > 180
           ? '${response.body.substring(0, 180)}...'
@@ -186,7 +227,8 @@ class _MainScreenState extends State<MainScreen> {
 
       if (mounted) {
         setState(() {
-          _n8nDiagnostics = 'n8n: HTTP ${response.statusCode}. Respuesta: $responsePreview';
+          final certNote = _lastN8nRequestUsedUntrustedCertificate ? ' usando certificado no confiable aceptado' : '';
+          _n8nDiagnostics = 'n8n: HTTP ${response.statusCode}$certNote. Respuesta: $responsePreview';
         });
       }
 
