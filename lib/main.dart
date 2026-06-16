@@ -43,7 +43,7 @@ class _MainScreenState extends State<MainScreen> {
   bool _isConnected = false;
   bool _isTyping = false;
 
-  int _totalPesajesExitosos = 0;
+  //int _totalPesajesExitosos = 0;
   DateTime? _lastTypedTime;
   final List<String> _receivedDataLog = [];
 
@@ -211,9 +211,9 @@ class _MainScreenState extends State<MainScreen> {
     return '"${value.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
   }
 
-  String _powershellStringLiteral(String value) {
+  /* String _powershellStringLiteral(String value) {
     return value.replaceAll('`', '``').replaceAll('"', '`"').replaceAll('\$', '`\$');
-  }
+  } */
 
   String? _decimalSeparatorFor(String value) {
     final dotIndex = value.lastIndexOf('.');
@@ -488,7 +488,7 @@ Start-Sleep -Milliseconds 60;
           }
 
           await _writeWeightToCursor(pesoFinalAInyectar);
-          _totalPesajesExitosos++;
+          //_totalPesajesExitosos++;
           _isTyping = false;
         }
       }
@@ -606,7 +606,7 @@ Start-Sleep -Milliseconds 60;
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _selectedInputUnit,
+                            initialValue: _selectedInputUnit,
                             decoration: const InputDecoration(labelText: 'Origen Balanza', border: OutlineInputBorder(), isDense: true),
                             items: _inputUnits.map((unit) {
                               return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
@@ -622,7 +622,7 @@ Start-Sleep -Milliseconds 60;
                         const SizedBox(width: 15),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _selectedOutputUnit,
+                            initialValue: _selectedOutputUnit,
                             decoration: const InputDecoration(labelText: 'Destino Escritura', border: OutlineInputBorder(), isDense: true),
                             items: _outputUnits.map((unit) {
                               return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
