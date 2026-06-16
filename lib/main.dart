@@ -10,6 +10,8 @@ void main() {
   runApp(const MyApp());
 }
 
+const MethodChannel _windowsKeyboardChannel = MethodChannel('pondera/windows_keyboard');
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
@@ -290,28 +292,6 @@ class _MainScreenState extends State<MainScreen> {
     return scriptBuffer.toString();
   }
 
-  String _parseKeysToWindowsSendKeys(String input) {
-    if (input.isEmpty) {
-      return '';
-    }
-    final StringBuffer buffer = StringBuffer();
-    final RegExp keyRegex = RegExp(r'(\{ENTER\}|\{TAB\}|\{SPACE\}|[^{]+)');
-    final matches = keyRegex.allMatches(input);
-    for (final match in matches) {
-      final token = match.group(0) ?? '';
-      if (token == '{TAB}') {
-        buffer.write('{TAB}');
-      } else if (token == '{ENTER}') {
-        buffer.write('{ENTER}');
-      } else if (token == '{SPACE}') {
-        buffer.write(' ');
-      } else {
-        buffer.write(token.replaceAll('~', '{~}').replaceAll('+', '{+}').replaceAll('^', '{^}').replaceAll('%', '{%}').replaceAll('(', '{(}').replaceAll(')', '{(}'));
-      }
-    }
-    return buffer.toString();
-  }
-
   String _getCurrentTimestamp() {
     final now = DateTime.now();
     final year = now.year;
@@ -352,26 +332,20 @@ end tell
       }
     }
 
-        if (Platform.isWindows) {
+    if (Platform.isWindows) {
       try {
-        // 1. Copiamos el peso en el portapapeles
         await Clipboard.setData(ClipboardData(text: weightToType));
+        await _windowsKeyboardChannel.invokeMethod<void>(
+          'sendPasteSequence',
+          <String, String>{
+            'prefix': currentPrefix,
+            'suffix': currentSuffix,
+          },
+        ).timeout(const Duration(seconds: 2));
 
-        // 2. Procesamos prefijos y sufijos en formato SendKeys
-        final winPrefix = _parseKeysToWindowsSendKeys(currentPrefix);
-        final winSuffix = _parseKeysToWindowsSendKeys(currentSuffix);
-        final fullSequence = '$winPrefix^v$winSuffix'; // ^v ejecuta el pegado físico (Ctrl+V)
-
-        // 3. Ejecutamos la inyección usando el motor nativo de Windows (mshta) vía CMD
-        // Esto esquiva por completo las restricciones de seguridad y directivas de Windows 11
-        await Process.run('cmd', [
-          '/c',
-          'mshta vbscript:CreateObject("WScript.Shell").SendKeys("$fullSequence")(window.close)'
-        ]).timeout(const Duration(seconds: 2));
-
-        debugPrint('Inyección por comando nativo completada con éxito.');
+        debugPrint('Inyección nativa de Windows completada con éxito.');
       } catch (e) {
-        debugPrint('Error en inyección CMD: $e');
+        debugPrint('Error en inyección nativa de Windows: $e');
       }
     }
   }
