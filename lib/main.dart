@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -12,6 +13,13 @@ void main() {
 }
 
 const MethodChannel _windowsKeyboardChannel = MethodChannel('pondera/windows_keyboard');
+
+enum ConnectionType { ethernet, serial }
+
+const Map<ConnectionType, String> _connectionTypeLabels = {
+  ConnectionType.ethernet: 'Ethernet',
+  ConnectionType.serial: 'RS-232',
+};
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -34,6 +42,9 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  static final DateTime _demoExpirationDate = DateTime(2026, 7, 16, 23, 59, 59);
+
+  ConnectionType _selectedConnectionType = ConnectionType.ethernet;
   String _deviceIp = '192.168.100.134';
   int _devicePort = 3004;
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook-test/pondera-recipe';
@@ -41,10 +52,15 @@ class _MainScreenState extends State<MainScreen> {
   final bool _allowUntrustedN8nCertificateFallback = true;
 
   Socket? _socket;
+  SerialPort? _serialPort;
+  SerialPortReader? _serialReader;
+  StreamSubscription<Uint8List>? _serialSubscription;
   Timer? _pollingTimer;
   Timer? _reconnectTimer;
+  Timer? _demoTimer;
   bool _isConnected = false;
   bool _isTyping = false;
+  bool _manualDisconnectRequested = false;
 
   DateTime? _lastTypedTime;
   final List<String> _receivedDataLog = [];
@@ -57,13 +73,40 @@ class _MainScreenState extends State<MainScreen> {
   String _n8nDiagnostics = 'n8n: sin petición enviada.';
   int _pollRequestsSent = 0;
   int _bytesReceived = 0;
+  int _serialIgnoredBytes = 0;
   bool _isPollingIndicator = false;
   bool _lastN8nRequestUsedUntrustedCertificate = false;
+  bool _isDemoExpired = false;
+  String _demoStatusMessage = '';
+
+  String _serialPortName = '';
+  int _serialBaudRate = 9600;
+  int _serialDataBits = 8;
+  int _serialStopBits = 1;
+  String _serialParity = 'none';
+  String _serialFlowControl = 'none';
+  List<String> _availableSerialPorts = [];
 
   String _selectedInputUnit = 'kg';
   String _selectedOutputUnit = 'kg';
   final List<String> _inputUnits = ['kg', 'lb'];
   final List<String> _outputUnits = ['kg', 'lb', 'g', 'mg', 'oz', 't', 'qq', '@'];
+  final List<int> _baudRates = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200];
+  final List<int> _dataBitsOptions = [7, 8];
+  final List<int> _stopBitsOptions = [1, 2];
+  final Map<String, String> _parityLabels = {
+    'none': 'Ninguna',
+    'even': 'Par',
+    'odd': 'Impar',
+    'mark': 'Mark',
+    'space': 'Space',
+  };
+  final Map<String, String> _flowControlLabels = {
+    'none': 'Ninguno',
+    'rtsCts': 'RTS/CTS',
+    'dtrDsr': 'DTR/DSR',
+    'xonXoff': 'XON/XOFF',
+  };
 
   final Map<String, String> _unitLabels = {
     'kg': 'Kg.',
@@ -79,6 +122,7 @@ class _MainScreenState extends State<MainScreen> {
 
   final TextEditingController _ipController = TextEditingController();
   final TextEditingController _portController = TextEditingController();
+  final TextEditingController _serialPortController = TextEditingController();
   final TextEditingController _prefixController = TextEditingController();
   final TextEditingController _suffixController = TextEditingController();
 
@@ -90,9 +134,11 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    _demoTimer?.cancel();
     _disconnect();
     _ipController.dispose();
     _portController.dispose();
+    _serialPortController.dispose();
     _prefixController.dispose();
     _suffixController.dispose();
     super.dispose();
@@ -100,11 +146,28 @@ class _MainScreenState extends State<MainScreen> {
 
   void _initSharedPreferences() async {
     _prefs = await SharedPreferences.getInstance();
+    await _validateDemoLicense();
+    final availablePorts = _listSerialPortsSafely();
     setState(() {
+      final savedConnectionType = _prefs.getString('pondera_connection_type') ?? 'ethernet';
+      _selectedConnectionType = savedConnectionType == 'serial' ? ConnectionType.serial : ConnectionType.ethernet;
+
       _deviceIp = _prefs.getString('pondera_ip') ?? '192.168.100.134';
       _devicePort = _prefs.getInt('pondera_port') ?? 3004;
       _ipController.text = _deviceIp;
       _portController.text = _devicePort.toString();
+
+      _availableSerialPorts = availablePorts;
+      _serialPortName = _prefs.getString('pondera_serial_port') ?? '';
+      if (_serialPortName.isEmpty && _availableSerialPorts.isNotEmpty) {
+        _serialPortName = _availableSerialPorts.first;
+      }
+      _serialPortController.text = _serialPortName;
+      _serialBaudRate = _prefs.getInt('pondera_serial_baud_rate') ?? 9600;
+      _serialDataBits = _prefs.getInt('pondera_serial_data_bits') ?? 8;
+      _serialStopBits = _prefs.getInt('pondera_serial_stop_bits') ?? 1;
+      _serialParity = _prefs.getString('pondera_serial_parity') ?? 'none';
+      _serialFlowControl = _prefs.getString('pondera_serial_flow_control') ?? 'none';
 
       _savedRegex = _prefs.getString('pondera_recipe') ?? '';
       _prefixController.text = _prefs.getString('pondera_prefix') ?? '';
@@ -112,13 +175,97 @@ class _MainScreenState extends State<MainScreen> {
       _selectedInputUnit = _prefs.getString('pondera_unit_in') ?? 'kg';
       _selectedOutputUnit = _prefs.getString('pondera_unit_out') ?? 'kg';
 
-      if (_savedRegex.isNotEmpty) {
+      if (_isDemoExpired) {
+        _cleanWeightDisplay = 'Demo vencida';
+        _uiStatusMessage = _demoStatusMessage;
+      } else if (_savedRegex.isNotEmpty) {
         _cleanWeightDisplay = '---';
         _uiStatusMessage = 'Listo para conectar a la balanza.';
       } else {
         _cleanWeightDisplay = 'Sin receta';
       }
     });
+    _demoTimer?.cancel();
+    _demoTimer = Timer.periodic(const Duration(minutes: 1), (_) => _checkDemoDuringRuntime());
+  }
+
+  Future<void> _validateDemoLicense() async {
+    final now = DateTime.now();
+    final locked = _prefs.getBool('pondera_demo_locked') ?? false;
+    final lastRunValue = _prefs.getString('pondera_demo_last_run');
+    final lastRun = lastRunValue == null ? null : DateTime.tryParse(lastRunValue)?.toLocal();
+    final clockTampered = lastRun != null && now.isBefore(lastRun.subtract(const Duration(minutes: 5)));
+    final expired = locked || now.isAfter(_demoExpirationDate) || clockTampered;
+
+    _isDemoExpired = expired;
+    if (expired) {
+      await _prefs.setBool('pondera_demo_locked', true);
+      _demoStatusMessage = clockTampered
+          ? 'Demo bloqueada: se detectó retroceso de fecha del sistema.'
+          : 'Demo vencida el ${_formatDate(_demoExpirationDate)}.';
+      return;
+    }
+
+    await _prefs.setString('pondera_demo_last_run', now.toIso8601String());
+    _demoStatusMessage = 'Demo vigente hasta el ${_formatDate(_demoExpirationDate)}.';
+  }
+
+  void _checkDemoDuringRuntime() async {
+    if (_isDemoExpired || DateTime.now().isBefore(_demoExpirationDate)) {
+      return;
+    }
+
+    await _prefs.setBool('pondera_demo_locked', true);
+    _isDemoExpired = true;
+    _demoStatusMessage = 'Demo vencida el ${_formatDate(_demoExpirationDate)}.';
+    _disconnect();
+    if (mounted) {
+      setState(() {
+        _cleanWeightDisplay = 'Demo vencida';
+        _uiStatusMessage = _demoStatusMessage;
+        _networkDiagnostics = 'La demo está bloqueada. No se abrirá conexión.';
+      });
+    }
+  }
+
+  String _formatDate(DateTime value) {
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final year = value.year.toString();
+    return '$day/$month/$year';
+  }
+
+  List<String> _listSerialPortsSafely() {
+    try {
+      return SerialPort.availablePorts;
+    } catch (e) {
+      debugPrint('No se pudieron listar puertos seriales: $e');
+      return [];
+    }
+  }
+
+  void _refreshSerialPorts() {
+    final ports = _listSerialPortsSafely();
+    setState(() {
+      _availableSerialPorts = ports;
+      if (_serialPortName.isEmpty && ports.isNotEmpty) {
+        _serialPortName = ports.first;
+        _serialPortController.text = _serialPortName;
+      }
+    });
+  }
+
+  void _saveConnectionType(ConnectionType connectionType) async {
+    if (_isConnected) {
+      _disconnect();
+    }
+    setState(() {
+      _selectedConnectionType = connectionType;
+      _networkDiagnostics = connectionType == ConnectionType.ethernet
+          ? 'Modo Ethernet seleccionado.'
+          : 'Modo RS-232 seleccionado.';
+    });
+    await _prefs.setString('pondera_connection_type', connectionType.name);
   }
 
   void _saveNetworkConfig() async {
@@ -142,6 +289,29 @@ class _MainScreenState extends State<MainScreen> {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Configuración de red guardada'), duration: Duration(milliseconds: 800)),
+      );
+    }
+  }
+
+  void _saveSerialConfig() async {
+    final serialPortName = _serialPortController.text.trim();
+    setState(() {
+      if (serialPortName.isNotEmpty) {
+        _serialPortName = serialPortName;
+      }
+    });
+
+    await _prefs.setString('pondera_serial_port', _serialPortName);
+    await _prefs.setInt('pondera_serial_baud_rate', _serialBaudRate);
+    await _prefs.setInt('pondera_serial_data_bits', _serialDataBits);
+    await _prefs.setInt('pondera_serial_stop_bits', _serialStopBits);
+    await _prefs.setString('pondera_serial_parity', _serialParity);
+    await _prefs.setString('pondera_serial_flow_control', _serialFlowControl);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Configuración RS-232 guardada'), duration: Duration(milliseconds: 800)),
       );
     }
   }
@@ -205,6 +375,10 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _sendToN8nIa() async {
+    if (_isDemoExpired) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_demoStatusMessage)));
+      return;
+    }
     if (_receivedDataLog.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Primero captura una trama.')));
       return;
@@ -299,7 +473,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String _appleScriptStringLiteral(String value) {
-    return '"${value.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}"';
+    return '"${value.replaceAll('\\', '\\\\').replaceAll('"', r'\"')}"';
   }
 
   String? _decimalSeparatorFor(String value) {
@@ -395,10 +569,98 @@ class _MainScreenState extends State<MainScreen> {
     final hour = now.hour.toString().padLeft(2, '0');
     final minute = now.minute.toString().padLeft(2, '0');
     final second = now.second.toString().padLeft(2, '0');
-    return '$year-$month-$day $hour:$minute:$second';
+    return '$year-$month-$day{SPACE}$hour:$minute:$second';
+  }
+
+  int _serialParityValue(String parity) {
+    switch (parity) {
+      case 'even':
+        return SerialPortParity.even;
+      case 'odd':
+        return SerialPortParity.odd;
+      case 'mark':
+        return SerialPortParity.mark;
+      case 'space':
+        return SerialPortParity.space;
+      case 'none':
+      default:
+        return SerialPortParity.none;
+    }
+  }
+
+  int _serialFlowControlValue(String flowControl) {
+    switch (flowControl) {
+      case 'rtsCts':
+        return SerialPortFlowControl.rtsCts;
+      case 'dtrDsr':
+        return SerialPortFlowControl.dtrDsr;
+      case 'xonXoff':
+        return SerialPortFlowControl.xonXoff;
+      case 'none':
+      default:
+        return SerialPortFlowControl.none;
+    }
+  }
+
+  ({String text, int ignoredBytes}) _cleanSerialChunk(List<int> data) {
+    final buffer = StringBuffer();
+    var ignoredBytes = 0;
+
+    for (final byte in data) {
+      final isLineSeparator = byte == 10 || byte == 13;
+      final isTab = byte == 9;
+      final isPrintableAscii = byte >= 32 && byte <= 126;
+      final isUtf8TextByte = byte >= 128;
+
+      if (isLineSeparator || isTab || isPrintableAscii || isUtf8TextByte) {
+        buffer.writeCharCode(byte);
+      } else {
+        ignoredBytes++;
+      }
+    }
+
+    final text = buffer.toString();
+    if (text.trim().isEmpty && _networkAccumulator.trim().isEmpty) {
+      ignoredBytes += data.length - ignoredBytes;
+      return (text: '', ignoredBytes: ignoredBytes);
+    }
+
+    return (text: text, ignoredBytes: ignoredBytes);
+  }
+
+  void _appendIncomingChunk(String chunk, int byteCount, {required String sourceLabel}) {
+    if (chunk.isEmpty) {
+      return;
+    }
+
+    _networkAccumulator += chunk;
+    _bytesReceived += byteCount;
+
+    if (mounted) {
+      setState(() {
+        final ignoredNote = _serialIgnoredBytes > 0 ? ' | Bytes ignorados: $_serialIgnoredBytes' : '';
+        _networkDiagnostics = 'Polling enviados: $_pollRequestsSent | Bytes útiles recibidos: $_bytesReceived | Último bloque $sourceLabel: $byteCount bytes$ignoredNote';
+      });
+    }
+
+    _processAccumulatedData();
+  }
+
+  String _activeDeviceLabel() {
+    if (_selectedConnectionType == ConnectionType.ethernet) {
+      return 'Ethernet $_deviceIp:$_devicePort';
+    }
+    final portName = _serialPortName.isEmpty ? 'sin puerto' : _serialPortName;
+    final parity = _parityLabels[_serialParity] ?? _serialParity;
+    final flowControl = _flowControlLabels[_serialFlowControl] ?? _serialFlowControl;
+    return 'RS-232 $portName | $_serialBaudRate $_serialDataBits-$parity-$_serialStopBits | Flujo: $flowControl';
   }
 
   Future<void> _writeWeightToCursor(String weightToType) async {
+    if (_isDemoExpired) {
+      return;
+    }
+
     final String timestampCurrent = _getCurrentTimestamp();
     
     final String currentPrefix = _prefixController.text.replaceAll('{AHORA}', timestampCurrent); 
@@ -446,11 +708,29 @@ end tell
   }
 
   void _connect() async {
+    if (_isDemoExpired) {
+      setState(() {
+        _uiStatusMessage = _demoStatusMessage;
+        _networkDiagnostics = 'La demo está bloqueada. No se abrirá conexión.';
+      });
+      return;
+    }
+
     _reconnectTimer?.cancel();
     if (_isConnected) {
       return;
     }
+    _manualDisconnectRequested = false;
 
+    if (_selectedConnectionType == ConnectionType.serial) {
+      _connectSerial();
+      return;
+    }
+
+    _connectEthernet();
+  }
+
+  void _connectEthernet() async {
     if (mounted) {
       setState(() {
         _uiStatusMessage = 'Conectando a $_deviceIp:$_devicePort...';
@@ -464,6 +744,7 @@ end tell
       _networkAccumulator = '';
       _pollRequestsSent = 0;
       _bytesReceived = 0;
+      _serialIgnoredBytes = 0;
 
       if (mounted) {
         setState(() {
@@ -496,16 +777,7 @@ end tell
       _socket!.listen(
         (List<int> data) {
           final String chunk = utf8.decode(data, allowMalformed: true);
-          _networkAccumulator += chunk;
-          _bytesReceived += data.length;
-
-          if (mounted) {
-            setState(() {
-              _networkDiagnostics = 'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived | Último bloque: ${data.length} bytes';
-            });
-          }
-
-          _processAccumulatedData();
+          _appendIncomingChunk(chunk, data.length, sourceLabel: 'TCP');
         },
         onError: (error) {
           debugPrint('Error de Socket: $error');
@@ -518,6 +790,89 @@ end tell
       );
     } catch (e) {
       _handleDisconnect('No se pudo conectar: $e');
+    }
+  }
+
+  void _connectSerial() async {
+    if (_serialPortName.isEmpty) {
+      _handleDisconnect('Seleccione un puerto RS-232 antes de conectar.', false);
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _uiStatusMessage = 'Conectando a $_serialPortName...';
+        _networkDiagnostics = 'Intentando abrir puerto serial RS-232...';
+      });
+    }
+
+    try {
+      final port = SerialPort(_serialPortName);
+      if (!port.openReadWrite()) {
+        final error = SerialPort.lastError;
+        port.dispose();
+        _handleDisconnect('No se pudo abrir $_serialPortName: ${error?.message ?? 'error desconocido'}', false);
+        return;
+      }
+
+      final config = SerialPortConfig()
+        ..baudRate = _serialBaudRate
+        ..bits = _serialDataBits
+        ..parity = _serialParityValue(_serialParity)
+        ..stopBits = _serialStopBits
+        ..setFlowControl(_serialFlowControlValue(_serialFlowControl));
+      port.config = config;
+
+      _serialPort = port;
+      _serialReader = SerialPortReader(port);
+      _isConnected = true;
+      _networkAccumulator = '';
+      _pollRequestsSent = 0;
+      _bytesReceived = 0;
+      _serialIgnoredBytes = 0;
+
+      if (mounted) {
+        setState(() {
+          _uiStatusMessage = 'RS-232 conectado. Esperando datos del indicador.';
+          _networkDiagnostics = 'Puerto serial abierto. Esperando datos del indicador...';
+        });
+      }
+
+      _serialSubscription = _serialReader!.stream.listen(
+        (Uint8List data) {
+          final cleanedChunk = _cleanSerialChunk(data);
+          if (cleanedChunk.ignoredBytes > 0) {
+            _serialIgnoredBytes += cleanedChunk.ignoredBytes;
+          }
+
+          if (cleanedChunk.text.isEmpty) {
+            if (mounted) {
+              setState(() {
+                _networkDiagnostics = 'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
+              });
+            }
+            return;
+          }
+
+          if (cleanedChunk.ignoredBytes > 0 && mounted) {
+            setState(() {
+              _networkDiagnostics = 'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
+            });
+          }
+
+          _appendIncomingChunk(cleanedChunk.text, data.length - cleanedChunk.ignoredBytes, sourceLabel: 'RS-232');
+        },
+        onError: (error) {
+          debugPrint('Error de puerto serial: $error');
+          _handleDisconnect('Error de puerto serial: $error');
+        },
+        onDone: () {
+          _handleDisconnect('Puerto serial cerrado por el sistema.');
+        },
+        cancelOnError: true,
+      );
+    } catch (e) {
+      _handleDisconnect('No se pudo conectar por RS-232: $e');
     }
   }
 
@@ -584,12 +939,20 @@ end tell
     }
   }
 
-  void _handleDisconnect([String reason = 'Fuera de línea. Reintentando...']) {
+  void _handleDisconnect([String reason = 'Fuera de línea. Reintentando...', bool shouldReconnect = true]) {
+    final allowReconnect = shouldReconnect && !_manualDisconnectRequested && !_isDemoExpired;
     _pollingTimer?.cancel();
     _isConnected = false;
     _isPollingIndicator = false;
     _socket?.destroy();
     _socket = null;
+    _serialSubscription?.cancel();
+    _serialSubscription = null;
+    _serialReader?.close();
+    _serialReader = null;
+    _serialPort?.close();
+    _serialPort?.dispose();
+    _serialPort = null;
     
     if (mounted) {
       setState(() {
@@ -599,22 +962,33 @@ end tell
     }
 
     _reconnectTimer?.cancel();
+    if (!allowReconnect) {
+      return;
+    }
     _reconnectTimer = Timer(const Duration(seconds: 2), () {
       _connect();
     });
   }
 
   void _disconnect() {
+    _manualDisconnectRequested = true;
     _pollingTimer?.cancel();
     _reconnectTimer?.cancel();
     _socket?.destroy();
     _socket = null;
+    _serialSubscription?.cancel();
+    _serialSubscription = null;
+    _serialReader?.close();
+    _serialReader = null;
+    _serialPort?.close();
+    _serialPort?.dispose();
+    _serialPort = null;
     _isConnected = false;
     if (mounted) {
       setState(() {
         _uiStatusMessage = 'Desconectado';
         _cleanWeightDisplay = '---';
-        _networkDiagnostics = 'Sin actividad de red.';
+        _networkDiagnostics = 'Sin actividad de enlace.';
       });
     }
   }
@@ -650,37 +1024,160 @@ end tell
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Configuración de Enlace de Red (Balanza Industrial)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+                    const Text('Configuración de Enlace (Balanza Industrial)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueAccent)),
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: TextField(
-                            controller: _ipController,
-                            decoration: const InputDecoration(labelText: 'Dirección IP', border: OutlineInputBorder(), isDense: true),
-                            style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          flex: 2,
-                          child: TextField(
-                            controller: _portController,
-                            decoration: const InputDecoration(labelText: 'Puerto', border: OutlineInputBorder(), isDense: true),
-                            style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
-                            keyboardType: TextInputType.number,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          onPressed: _saveNetworkConfig,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade700, padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12)),
-                          child: const Icon(Icons.save_sharp, size: 18),
-                        ),
-                      ],
+                    DropdownButtonFormField<ConnectionType>(
+                      initialValue: _selectedConnectionType,
+                      decoration: const InputDecoration(labelText: 'Tipo de conexión', border: OutlineInputBorder(), isDense: true),
+                      items: ConnectionType.values.map((type) {
+                        return DropdownMenuItem(value: type, child: Text(_connectionTypeLabels[type] ?? type.name));
+                      }).toList(),
+                      onChanged: showingConnected
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                _saveConnectionType(value);
+                              }
+                            },
                     ),
+                    const SizedBox(height: 10),
+                    if (_selectedConnectionType == ConnectionType.ethernet)
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: TextField(
+                              controller: _ipController,
+                              decoration: const InputDecoration(labelText: 'Dirección IP', border: OutlineInputBorder(), isDense: true),
+                              style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            flex: 2,
+                            child: TextField(
+                              controller: _portController,
+                              decoration: const InputDecoration(labelText: 'Puerto TCP', border: OutlineInputBorder(), isDense: true),
+                              style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          ElevatedButton(
+                            onPressed: _saveNetworkConfig,
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade700, padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12)),
+                            child: const Icon(Icons.save_sharp, size: 18),
+                          ),
+                        ],
+                      ),
+                    if (_selectedConnectionType == ConnectionType.serial)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: TextField(
+                                  controller: _serialPortController,
+                                  decoration: InputDecoration(
+                                    labelText: Platform.isWindows ? 'Puerto serial (ej. COM3)' : 'Puerto serial',
+                                    border: const OutlineInputBorder(),
+                                    isDense: true,
+                                  ),
+                                  style: const TextStyle(fontSize: 13, fontFamily: 'Courier'),
+                                  onChanged: (value) => _serialPortName = value.trim(),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                flex: 2,
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _availableSerialPorts.contains(_serialPortName) ? _serialPortName : null,
+                                  decoration: const InputDecoration(labelText: 'Detectados', border: OutlineInputBorder(), isDense: true),
+                                  items: _availableSerialPorts.map((port) {
+                                    return DropdownMenuItem(value: port, child: Text(port));
+                                  }).toList(),
+                                  onChanged: (value) {
+                                    if (value == null) {
+                                      return;
+                                    }
+                                    setState(() {
+                                      _serialPortName = value;
+                                      _serialPortController.text = value;
+                                    });
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              IconButton(
+                                onPressed: _refreshSerialPorts,
+                                tooltip: 'Actualizar puertos',
+                                icon: const Icon(Icons.refresh),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: _baudRates.contains(_serialBaudRate) ? _serialBaudRate : 9600,
+                                  decoration: const InputDecoration(labelText: 'Baud rate', border: OutlineInputBorder(), isDense: true),
+                                  items: _baudRates.map((rate) => DropdownMenuItem(value: rate, child: Text(rate.toString()))).toList(),
+                                  onChanged: (value) => setState(() => _serialBaudRate = value ?? 9600),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: _dataBitsOptions.contains(_serialDataBits) ? _serialDataBits : 8,
+                                  decoration: const InputDecoration(labelText: 'Data bits', border: OutlineInputBorder(), isDense: true),
+                                  items: _dataBitsOptions.map((bits) => DropdownMenuItem(value: bits, child: Text(bits.toString()))).toList(),
+                                  onChanged: (value) => setState(() => _serialDataBits = value ?? 8),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _parityLabels.containsKey(_serialParity) ? _serialParity : 'none',
+                                  decoration: const InputDecoration(labelText: 'Paridad', border: OutlineInputBorder(), isDense: true),
+                                  items: _parityLabels.entries.map((entry) => DropdownMenuItem(value: entry.key, child: Text(entry.value))).toList(),
+                                  onChanged: (value) => setState(() => _serialParity = value ?? 'none'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: DropdownButtonFormField<int>(
+                                  initialValue: _stopBitsOptions.contains(_serialStopBits) ? _serialStopBits : 1,
+                                  decoration: const InputDecoration(labelText: 'Stop bits', border: OutlineInputBorder(), isDense: true),
+                                  items: _stopBitsOptions.map((bits) => DropdownMenuItem(value: bits, child: Text(bits.toString()))).toList(),
+                                  onChanged: (value) => setState(() => _serialStopBits = value ?? 1),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: _flowControlLabels.containsKey(_serialFlowControl) ? _serialFlowControl : 'none',
+                                  decoration: const InputDecoration(labelText: 'Flow control', border: OutlineInputBorder(), isDense: true),
+                                  items: _flowControlLabels.entries.map((entry) => DropdownMenuItem(value: entry.key, child: Text(entry.value))).toList(),
+                                  onChanged: (value) => setState(() => _serialFlowControl = value ?? 'none'),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: ElevatedButton(
+                              onPressed: _saveSerialConfig,
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey.shade700, padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12)),
+                              child: const Icon(Icons.save_sharp, size: 18),
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -698,7 +1195,7 @@ end tell
                       children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _selectedInputUnit,
+                            initialValue: _selectedInputUnit,
                             decoration: const InputDecoration(labelText: 'Origen Balanza', border: OutlineInputBorder(), isDense: true),
                             items: _inputUnits.map((unit) {
                               return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
@@ -714,7 +1211,7 @@ end tell
                         const SizedBox(width: 15),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _selectedOutputUnit,
+                            initialValue: _selectedOutputUnit,
                             decoration: const InputDecoration(labelText: 'Destino Escritura', border: OutlineInputBorder(), isDense: true),
                             items: _outputUnits.map((unit) {
                               return DropdownMenuItem(value: unit, child: Text(_unitLabels[unit] ?? unit));
@@ -777,7 +1274,9 @@ end tell
                 padding: const EdgeInsets.all(15.0),
                 child: Column(
                   children: [
-                    Text('Dispositivo de destino activo: $_deviceIp:$_devicePort', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70)),
+                    Text('Dispositivo de destino activo: ${_activeDeviceLabel()}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70)),
+                    const SizedBox(height: 5),
+                    Text(_demoStatusMessage, style: TextStyle(fontSize: 12, color: _isDemoExpired ? Colors.redAccent : Colors.lightGreenAccent)),
                     const SizedBox(height: 5),
                     Text('Estado: $_uiStatusMessage', style: TextStyle(color: showingConnected ? Colors.green : Colors.orange, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 5),
@@ -789,12 +1288,12 @@ end tell
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         ElevatedButton(
-                          onPressed: showingConnected ? _disconnect : _connect,
+                          onPressed: _isDemoExpired ? null : (showingConnected ? _disconnect : _connect),
                           style: ElevatedButton.styleFrom(backgroundColor: showingConnected ? Colors.red.shade700 : Colors.blue.shade700),
                           child: Text(showingConnected ? 'Desconectar' : 'Conectar Indicador'),
                         ),
                         ElevatedButton(
-                          onPressed: _sendToN8nIa,
+                          onPressed: _isDemoExpired ? null : _sendToN8nIa,
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.purple.shade700),
                           child: const Text('Enviar Trama a n8n'),
                         ),
