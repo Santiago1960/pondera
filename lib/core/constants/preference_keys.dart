@@ -18,4 +18,7 @@ class PreferenceKeys {
   static const outputUnit = 'pondera_unit_out';
   static const demoLocked = 'pondera_demo_locked';
   static const demoLastRun = 'pondera_demo_last_run';
+  static const signedLicense = 'pondera_signed_license';
+  static const offlineLicenseLastValidation =
+      'pondera_offline_license_last_validation';
 }

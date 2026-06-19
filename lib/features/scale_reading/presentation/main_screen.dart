@@ -8,10 +8,21 @@ import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../connection/domain/connection_type.dart';
+import '../../license/application/activation_request_service.dart';
 import '../../license/application/demo_license_controller.dart';
+import '../../license/application/offline_license_controller.dart';
+import '../../license/data/activation_request_exporter.dart';
+import '../../license/data/installation_identity_repository.dart';
+import '../../license/data/license_file_importer.dart';
+import '../../license/data/license_key_registry.dart';
+import '../../license/data/license_verifier.dart';
+import '../../license/data/offline_license_repository.dart';
 import '../../license/domain/demo_license.dart';
+import '../../license/domain/license_verification_result.dart';
+import '../../license/presentation/activation_request_dialog.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_parser.dart';
 import '../domain/weight_converter.dart';
@@ -104,7 +115,13 @@ class _MainScreenState extends State<MainScreen> {
 
   late SettingsRepository _settingsRepository;
   late DemoLicenseController _demoLicenseController;
+  ActivationRequestService? _activationRequestService;
+  OfflineLicenseController? _offlineLicenseController;
+  final ActivationRequestExporter _activationRequestExporter =
+      const ActivationRequestExporter();
+  final LicenseFileImporter _licenseFileImporter = const LicenseFileImporter();
   DemoLicense? _demoLicense;
+  LicenseVerificationResult? _offlineLicenseResult;
 
   final TextEditingController _ipController = TextEditingController();
   final TextEditingController _portController = TextEditingController();
@@ -132,17 +149,34 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _initialize() async {
     _settingsRepository = await SettingsRepository.create();
+    final identityRepository = await InstallationIdentityRepository.create();
+    _activationRequestService = ActivationRequestService(identityRepository);
+    _offlineLicenseController = OfflineLicenseController(
+      identityRepository,
+      await OfflineLicenseRepository.create(),
+      LicenseVerifier(LicenseKeyRegistry.forCurrentBuild()),
+    );
     _demoLicenseController = DemoLicenseController(_settingsRepository);
-    final license = await _demoLicenseController.validate();
+    final offlineLicense = await _offlineLicenseController!.validateStored();
+    final demoLicense =
+        offlineLicense.status == LicenseVerificationStatus.missing
+        ? await _demoLicenseController.validate()
+        : null;
     final settings = _settingsRepository.load();
     final availablePorts = _listSerialPortsSafely();
     if (!mounted) {
       return;
     }
     setState(() {
-      _demoLicense = license;
-      _isDemoExpired = license.isExpired;
-      _demoStatusMessage = license.statusMessage;
+      _offlineLicenseResult = offlineLicense;
+      _demoLicense = demoLicense;
+      if (offlineLicense.status != LicenseVerificationStatus.missing) {
+        _isDemoExpired = !offlineLicense.isUsable;
+        _demoStatusMessage = offlineLicense.message;
+      } else {
+        _isDemoExpired = demoLicense!.isExpired;
+        _demoStatusMessage = demoLicense.statusMessage;
+      }
       _selectedConnectionType = settings.connectionType == 'serial'
           ? ConnectionType.serial
           : ConnectionType.ethernet;
@@ -174,7 +208,10 @@ class _MainScreenState extends State<MainScreen> {
           WeightUnit.fromCode(settings.outputUnit) ?? WeightUnit.kilogram;
 
       if (_isDemoExpired) {
-        _cleanWeightDisplay = 'Demo vencida';
+        _cleanWeightDisplay =
+            offlineLicense.status == LicenseVerificationStatus.missing
+            ? 'Demo vencida'
+            : 'Licencia inválida';
         _uiStatusMessage = _demoStatusMessage;
       } else if (_savedRegex.isNotEmpty) {
         _cleanWeightDisplay = '---';
@@ -186,11 +223,35 @@ class _MainScreenState extends State<MainScreen> {
     _demoTimer?.cancel();
     _demoTimer = Timer.periodic(
       const Duration(minutes: 1),
-      (_) => _checkDemoDuringRuntime(),
+      (_) => _checkLicenseDuringRuntime(),
     );
   }
 
-  Future<void> _checkDemoDuringRuntime() async {
+  Future<void> _checkLicenseDuringRuntime() async {
+    final offlineLicense = _offlineLicenseResult;
+    if (offlineLicense != null &&
+        offlineLicense.status != LicenseVerificationStatus.missing) {
+      final updatedLicense = await _offlineLicenseController!.validateStored();
+      if (!mounted) {
+        return;
+      }
+      _offlineLicenseResult = updatedLicense;
+      _isDemoExpired = !updatedLicense.isUsable;
+      _demoStatusMessage = updatedLicense.message;
+      if (_isDemoExpired) {
+        _disconnect();
+      }
+      setState(() {
+        if (_isDemoExpired) {
+          _cleanWeightDisplay = 'Licencia vencida';
+          _uiStatusMessage = updatedLicense.message;
+          _networkDiagnostics =
+              'La licencia está bloqueada. No se abrirá conexión.';
+        }
+      });
+      return;
+    }
+
     final currentLicense = _demoLicense;
     if (currentLicense == null) {
       return;
@@ -234,6 +295,106 @@ class _MainScreenState extends State<MainScreen> {
           ? 'La fecha de vencimiento configurada ya pasó.'
           : 'Bloqueo de demo eliminado en modo desarrollo.';
     });
+  }
+
+  Future<void> _generateActivationRequest() async {
+    final formData = await showActivationRequestDialog(
+      context,
+      suggestedDeviceLabel: Platform.localHostname,
+    );
+    if (formData == null || !mounted) {
+      return;
+    }
+
+    try {
+      final activationRequestService = _activationRequestService;
+      if (activationRequestService == null) {
+        throw StateError('Pondera todavía se está inicializando.');
+      }
+      final packageInfo = await PackageInfo.fromPlatform();
+      final appVersion = packageInfo.buildNumber.isEmpty
+          ? packageInfo.version
+          : '${packageInfo.version}+${packageInfo.buildNumber}';
+      final request = await activationRequestService.create(
+        platform: Platform.operatingSystem,
+        appVersion: appVersion,
+        customerName: formData.customerName,
+        siteName: formData.siteName,
+        city: formData.city,
+        deviceLabel: formData.deviceLabel,
+        assetTag: formData.assetTag,
+      );
+      final savedPath = await _activationRequestExporter.export(request);
+      if (savedPath == null || !mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Solicitud guardada en $savedPath'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } catch (error) {
+      debugPrint('No se pudo generar la solicitud de activación: $error');
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo guardar la solicitud: $error')),
+      );
+    }
+  }
+
+  Future<void> _importOfflineLicense() async {
+    try {
+      final encodedLicense = await _licenseFileImporter.selectAndRead();
+      if (encodedLicense == null || !mounted) {
+        return;
+      }
+      final controller = _offlineLicenseController;
+      if (controller == null) {
+        throw StateError('Pondera todavía se está inicializando.');
+      }
+
+      final result = await controller.import(encodedLicense);
+      if (!mounted) {
+        return;
+      }
+      if (!result.isUsable) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result.message)));
+        return;
+      }
+
+      setState(() {
+        _offlineLicenseResult = result;
+        _demoLicense = null;
+        _isDemoExpired = false;
+        _demoStatusMessage = result.message;
+        _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
+        _uiStatusMessage = 'Licencia activada. Lista para continuar.';
+        _networkDiagnostics =
+            'Licencia ${result.payload!.licenseId} verificada correctamente.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Licencia activada para ${result.payload!.customerName} · '
+            '${result.payload!.deviceLabel}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      debugPrint('No se pudo importar la licencia: $error');
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo importar la licencia: $error')),
+      );
+    }
   }
 
   List<String> _listSerialPortsSafely() {
@@ -1603,12 +1764,43 @@ end tell
                               : Colors.lightGreenAccent,
                         ),
                       ),
-                      if (kDebugMode && _isDemoExpired)
+                      if (_offlineLicenseResult?.payload
+                          case final payload?) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '${payload.customerName} · ${payload.siteName} · ${payload.city}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.white70,
+                          ),
+                        ),
+                        Text(
+                          '${payload.deviceLabel} · Licencia ${payload.licenseId}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ],
+                      if (kDebugMode &&
+                          _isDemoExpired &&
+                          _offlineLicenseResult?.status ==
+                              LicenseVerificationStatus.missing)
                         TextButton.icon(
                           onPressed: _resetDemoForDevelopment,
                           icon: const Icon(Icons.restart_alt),
                           label: const Text('Restablecer demo (desarrollo)'),
                         ),
+                      OutlinedButton.icon(
+                        onPressed: _generateActivationRequest,
+                        icon: const Icon(Icons.description_outlined),
+                        label: const Text('Generar solicitud de activación'),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: _importOfflineLicense,
+                        icon: const Icon(Icons.verified_user_outlined),
+                        label: const Text('Importar licencia'),
+                      ),
                       const SizedBox(height: 5),
                       Text(
                         'Estado: $_uiStatusMessage',

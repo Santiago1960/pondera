@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Pondera license signing keys must never be committed.
+*.pondera-private-key
+
 # Symbolication related
 app.*.symbols
 
