@@ -1,20 +1,51 @@
+import 'dart:io';
+
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/preference_keys.dart';
+import 'offline_license_file_store.dart';
 
 class OfflineLicenseRepository {
-  const OfflineLicenseRepository(this._preferences);
+  const OfflineLicenseRepository(this._fileStore, this._preferences);
 
+  final OfflineLicenseFileStore _fileStore;
   final SharedPreferences _preferences;
 
   static Future<OfflineLicenseRepository> create() async {
-    return OfflineLicenseRepository(await SharedPreferences.getInstance());
+    final supportDirectory = await getApplicationSupportDirectory();
+    return OfflineLicenseRepository(
+      ApplicationSupportLicenseFileStore(
+        File(
+          '${supportDirectory.path}${Platform.pathSeparator}licensing'
+          '${Platform.pathSeparator}active.pondera-license',
+        ),
+      ),
+      await SharedPreferences.getInstance(),
+    );
   }
 
-  String? load() => _preferences.getString(PreferenceKeys.signedLicense);
+  Future<String?> load() async {
+    final storedValue = (await _fileStore.read())?.trim();
+    if (storedValue != null && storedValue.isNotEmpty) {
+      return storedValue;
+    }
+
+    final legacyValue = _preferences
+        .getString(PreferenceKeys.signedLicense)
+        ?.trim();
+    if (legacyValue == null || legacyValue.isEmpty) {
+      return null;
+    }
+
+    await _writeAndVerify(legacyValue);
+    await _preferences.remove(PreferenceKeys.signedLicense);
+    return legacyValue;
+  }
 
   Future<void> save(String encodedLicense) async {
-    await _preferences.setString(PreferenceKeys.signedLicense, encodedLicense);
+    await _writeAndVerify(encodedLicense);
+    await _preferences.remove(PreferenceKeys.signedLicense);
   }
 
   DateTime? loadLastValidation() {
@@ -41,7 +72,16 @@ class OfflineLicenseRepository {
   }
 
   Future<void> clear() async {
+    await _fileStore.delete();
     await _preferences.remove(PreferenceKeys.signedLicense);
     await _preferences.remove(PreferenceKeys.offlineLicenseLastValidation);
+  }
+
+  Future<void> _writeAndVerify(String encodedLicense) async {
+    await _fileStore.write(encodedLicense);
+    final persistedValue = (await _fileStore.read())?.trim();
+    if (persistedValue != encodedLicense.trim()) {
+      throw StateError('No se pudo verificar el archivo local de licencia.');
+    }
   }
 }

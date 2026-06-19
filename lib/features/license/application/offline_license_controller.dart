@@ -18,7 +18,7 @@ class OfflineLicenseController {
   static const _clockRollbackTolerance = Duration(minutes: 5);
 
   Future<LicenseVerificationResult> validateStored({DateTime? now}) async {
-    final encodedLicense = _licenseRepository.load();
+    final encodedLicense = await _licenseRepository.load();
     if (encodedLicense == null || encodedLicense.trim().isEmpty) {
       return const LicenseVerificationResult(
         status: LicenseVerificationStatus.missing,

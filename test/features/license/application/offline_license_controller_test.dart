@@ -4,6 +4,7 @@ import 'package:pondera/core/constants/preference_keys.dart';
 import 'package:pondera/features/license/application/offline_license_controller.dart';
 import 'package:pondera/features/license/data/installation_identity_repository.dart';
 import 'package:pondera/features/license/data/license_key_registry.dart';
+import 'package:pondera/features/license/data/offline_license_file_store.dart';
 import 'package:pondera/features/license/data/license_verifier.dart';
 import 'package:pondera/features/license/data/offline_license_repository.dart';
 import 'package:pondera/features/license/domain/license_payload.dart';
@@ -33,13 +34,14 @@ void main() {
       license.encode(),
       now: DateTime.utc(2026, 7, 1),
     );
+    final reloaded = await controller.validateStored(
+      now: DateTime.utc(2026, 7, 1),
+    );
 
     expect(result.status, LicenseVerificationStatus.active);
     expect(result.payload?.customerName, 'SIGMA ALIMENTOS');
-    expect(
-      preferences.getString(PreferenceKeys.signedLicense),
-      license.encode(),
-    );
+    expect(reloaded.status, LicenseVerificationStatus.active);
+    expect(preferences.getString(PreferenceKeys.signedLicense), isNull);
   });
 
   test('rechaza una licencia emitida para otra instalación', () async {
@@ -102,6 +104,33 @@ void main() {
     expect(graceResult.status, LicenseVerificationStatus.gracePeriod);
     expect(expiredResult.status, LicenseVerificationStatus.expired);
   });
+
+  test(
+    'trata vencimiento y fin de gracia como instantes UTC exclusivos',
+    () async {
+      final preferences = await SharedPreferences.getInstance();
+      final controller = _buildController(preferences, 'INSTALL-TEST');
+      final license = await _signedLicense(
+        installationId: 'INSTALL-TEST',
+        expiresAt: DateTime.utc(2026, 8, 1),
+        graceUntil: DateTime.utc(2026, 8, 15),
+      );
+      await controller.import(
+        license.encode(),
+        now: DateTime.utc(2026, 7, 31, 23, 59, 59),
+      );
+
+      final atExpiration = await controller.validateStored(
+        now: DateTime.utc(2026, 8, 1),
+      );
+      final atGraceEnd = await controller.validateStored(
+        now: DateTime.utc(2026, 8, 15),
+      );
+
+      expect(atExpiration.status, LicenseVerificationStatus.gracePeriod);
+      expect(atGraceEnd.status, LicenseVerificationStatus.expired);
+    },
+  );
 
   test(
     'bloquea la licencia cuando el reloj retrocede más de cinco minutos',
@@ -182,9 +211,26 @@ OfflineLicenseController _buildController(
 ) {
   return OfflineLicenseController(
     InstallationIdentityRepository(_FixedInstallationStore(installationId)),
-    OfflineLicenseRepository(preferences),
+    OfflineLicenseRepository(_MemoryLicenseFileStore(), preferences),
     LicenseVerifier(LicenseKeyRegistry.forCurrentBuild()),
   );
+}
+
+class _MemoryLicenseFileStore implements OfflineLicenseFileStore {
+  String? value;
+
+  @override
+  Future<String?> read() async => value;
+
+  @override
+  Future<void> write(String value) async {
+    this.value = value;
+  }
+
+  @override
+  Future<void> delete() async {
+    value = null;
+  }
 }
 
 Future<SignedLicense> _signedLicense({

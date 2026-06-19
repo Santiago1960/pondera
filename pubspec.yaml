@@ -12,8 +12,10 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_libserialport: ^0.6.0
+  flutter_secure_storage: ^10.3.1
   http: ^1.6.0
   package_info_plus: ^10.1.0
+  path_provider: ^2.1.6
   shared_preferences: ^2.5.5
 
 dev_dependencies:

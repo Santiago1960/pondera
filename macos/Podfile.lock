@@ -4,6 +4,9 @@ PODS:
   - flutter_libserialport (0.0.1):
     - FlutterMacOS
     - libserialport
+  - flutter_secure_storage_darwin (10.0.0):
+    - Flutter
+    - FlutterMacOS
   - FlutterMacOS (1.0.0)
   - libserialport (0.1.1)
   - package_info_plus (0.0.1):
@@ -15,6 +18,7 @@ PODS:
 DEPENDENCIES:
   - file_selector_macos (from `Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos`)
   - flutter_libserialport (from `Flutter/ephemeral/.symlinks/plugins/flutter_libserialport/macos`)
+  - flutter_secure_storage_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - package_info_plus (from `Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos`)
   - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
@@ -28,6 +32,8 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos
   flutter_libserialport:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_libserialport/macos
+  flutter_secure_storage_darwin:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin
   FlutterMacOS:
     :path: Flutter/ephemeral
   package_info_plus:
@@ -38,6 +44,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   file_selector_macos: 3e56eaea051180007b900eacb006686fd54da150
   flutter_libserialport: d1a505fd4b05785f7b50cc7c93b361937ea1c5bd
+  flutter_secure_storage_darwin: 557817588b80e60213cbecb573c45c76b788018d
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   libserialport: 1cb25e66ef3c92a8e59c2ea3820302c3fa2268cd
   package_info_plus: 12f1c5c2cfe8727ca46cbd0b26677728972d9a5b

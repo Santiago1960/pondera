@@ -63,26 +63,26 @@ class LicenseVerifier {
       }
 
       final expiresAt = payload.expiresAt;
-      if (expiresAt != null && currentTime.isAfter(expiresAt)) {
+      if (expiresAt != null && !currentTime.isBefore(expiresAt)) {
         final graceUntil = payload.graceUntil;
-        if (graceUntil != null && !currentTime.isAfter(graceUntil)) {
+        if (graceUntil != null && currentTime.isBefore(graceUntil)) {
           return LicenseVerificationResult(
             status: LicenseVerificationStatus.gracePeriod,
             message:
-                'Licencia en período de gracia hasta ${_formatDate(graceUntil)}.',
+                'Licencia en período de gracia hasta ${_formatLocalDateTime(graceUntil)}.',
             payload: payload,
           );
         }
         return LicenseVerificationResult(
           status: LicenseVerificationStatus.expired,
-          message: 'Licencia vencida el ${_formatDate(expiresAt)}.',
+          message: 'Licencia vencida el ${_formatLocalDateTime(expiresAt)}.',
           payload: payload,
         );
       }
 
       final expirationMessage = expiresAt == null
           ? 'Licencia perpetua activa.'
-          : 'Licencia activa hasta ${_formatDate(expiresAt)}.';
+          : 'Licencia activa hasta ${_formatLocalDateTime(expiresAt)}.';
       return LicenseVerificationResult(
         status: LicenseVerificationStatus.active,
         message: expirationMessage,
@@ -102,9 +102,12 @@ class LicenseVerifier {
   }
 }
 
-String _formatDate(DateTime value) {
+String _formatLocalDateTime(DateTime value) {
   final local = value.toLocal();
   final day = local.day.toString().padLeft(2, '0');
   final month = local.month.toString().padLeft(2, '0');
-  return '$day/$month/${local.year}';
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$day/$month/${local.year} $hour:$minute '
+      '(${local.timeZoneName}, hora local)';
 }

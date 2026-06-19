@@ -4,6 +4,7 @@ import 'package:pondera/features/license/domain/license_activation_request.dart'
 
 import 'src/license_signing_key.dart';
 import 'src/offline_license_issuer.dart';
+import 'src/utc_instant_parser.dart';
 
 Future<void> main(List<String> arguments) async {
   try {
@@ -14,14 +15,14 @@ Future<void> main(List<String> arguments) async {
       await requestFile.readAsString(),
     );
     final signingKey = LicenseSigningKey.decode(await keyFile.readAsString());
-    final expiresAt = _parseExpirationDate(options.expiresOn);
+    final expiresAt = parseUtcInstant(options.expiresAt);
 
     stdout.writeln('Solicitud: ${request.requestId}');
     stdout.writeln('Cliente: ${request.customerName} (${options.customerId})');
     stdout.writeln('Sucursal: ${request.siteName} (${options.siteId})');
     stdout.writeln('Equipo: ${request.deviceLabel}');
     stdout.writeln('Instalación: ${request.installationId}');
-    stdout.writeln('Vencimiento: ${options.expiresOn}');
+    stdout.writeln('Vencimiento UTC: ${expiresAt.toIso8601String()}');
     stdout.writeln('Gracia: ${options.graceDays} días');
     stdout.writeln('Clave: ${signingKey.keyId}');
 
@@ -59,21 +60,6 @@ bool _confirmIssuance() {
   return answer == 's' || answer == 'si' || answer == 'sí';
 }
 
-DateTime _parseExpirationDate(String source) {
-  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(source);
-  if (match == null) {
-    throw const FormatException('La fecha debe tener formato YYYY-MM-DD.');
-  }
-  final year = int.parse(match.group(1)!);
-  final month = int.parse(match.group(2)!);
-  final day = int.parse(match.group(3)!);
-  final value = DateTime.utc(year, month, day, 23, 59, 59);
-  if (value.year != year || value.month != month || value.day != day) {
-    throw const FormatException('La fecha de vencimiento no existe.');
-  }
-  return value;
-}
-
 String _defaultOutputPath(String requestPath) {
   const extension = '.pondera-request';
   if (requestPath.endsWith(extension)) {
@@ -89,7 +75,7 @@ class _IssueOptions {
     required this.licenseId,
     required this.customerId,
     required this.siteId,
-    required this.expiresOn,
+    required this.expiresAt,
     required this.graceDays,
     required this.confirmed,
     this.outputPath,
@@ -100,7 +86,7 @@ class _IssueOptions {
   final String licenseId;
   final String customerId;
   final String siteId;
-  final String expiresOn;
+  final String expiresAt;
   final int graceDays;
   final bool confirmed;
   final String? outputPath;
@@ -150,7 +136,7 @@ class _IssueOptions {
       licenseId: requiredOption('--license-id'),
       customerId: requiredOption('--customer-id'),
       siteId: requiredOption('--site-id'),
-      expiresOn: requiredOption('--expires'),
+      expiresAt: requiredOption('--expires-at'),
       graceDays: graceDays,
       confirmed: confirmed,
       outputPath: values['--output']?.trim(),
@@ -172,7 +158,7 @@ Uso:
     --license-id <LIC-...> \\
     --customer-id <CLI-...> \\
     --site-id <SITE-...> \\
-    --expires <YYYY-MM-DD> \\
+    --expires-at <YYYY-MM-DDTHH:MM:SSZ> \\
     [--grace-days <días>] \\
     [--output <salida.pondera-license>] \\
     [--yes]
