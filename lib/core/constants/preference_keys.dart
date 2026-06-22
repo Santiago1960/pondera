@@ -16,7 +16,9 @@ class PreferenceKeys {
   static const suffix = 'pondera_suffix';
   static const inputUnit = 'pondera_unit_in';
   static const outputUnit = 'pondera_unit_out';
+  static const themeMode = 'pondera_theme_mode';
   static const demoLocked = 'pondera_demo_locked';
+  static const demoStartedAt = 'pondera_demo_started_at';
   static const demoLastRun = 'pondera_demo_last_run';
   static const signedLicense = 'pondera_signed_license';
   static const offlineLicenseLastValidation =

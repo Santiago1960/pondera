@@ -15,7 +15,13 @@ class SettingsRepository {
   bool get isDemoLocked =>
       _preferences.getBool(PreferenceKeys.demoLocked) ?? false;
 
+  String? get demoStartedAt =>
+      _preferences.getString(PreferenceKeys.demoStartedAt);
+
   String? get demoLastRun => _preferences.getString(PreferenceKeys.demoLastRun);
+
+  String loadThemeMode() =>
+      _preferences.getString(PreferenceKeys.themeMode) ?? 'system';
 
   AppSettings load() {
     return AppSettings(
@@ -83,6 +89,10 @@ class SettingsRepository {
     await _preferences.setString(PreferenceKeys.outputUnit, outputUnit);
   }
 
+  Future<void> saveThemeMode(String themeMode) async {
+    await _preferences.setString(PreferenceKeys.themeMode, themeMode);
+  }
+
   Future<void> saveRecipe({
     required String pattern,
     required String expectedValue,
@@ -99,6 +109,13 @@ class SettingsRepository {
     await _preferences.setBool(PreferenceKeys.demoLocked, true);
   }
 
+  Future<void> saveDemoStartedAt(DateTime value) async {
+    await _preferences.setString(
+      PreferenceKeys.demoStartedAt,
+      value.toIso8601String(),
+    );
+  }
+
   Future<void> saveDemoLastRun(DateTime value) async {
     await _preferences.setString(
       PreferenceKeys.demoLastRun,
@@ -108,6 +125,7 @@ class SettingsRepository {
 
   Future<void> resetDemo() async {
     await _preferences.remove(PreferenceKeys.demoLocked);
+    await _preferences.remove(PreferenceKeys.demoStartedAt);
     await _preferences.remove(PreferenceKeys.demoLastRun);
   }
 }

@@ -6,17 +6,17 @@ import 'package:pondera/features/settings/data/settings_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  final expirationDate = DateTime(2026, 7, 16, 23, 59, 59);
+  const demoDuration = Duration(days: 15);
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('mantiene activa la demo antes de su vencimiento', () async {
+  test('inicia la demo en el primer arranque y guarda su vigencia', () async {
     final preferences = await SharedPreferences.getInstance();
     final controller = DemoLicenseController(
       SettingsRepository(preferences),
-      expirationDate: expirationDate,
+      demoDuration: demoDuration,
     );
     final now = DateTime(2026, 7, 1, 12);
 
@@ -24,19 +24,51 @@ void main() {
 
     expect(license.status, DemoLicenseStatus.active);
     expect(
+      preferences.getString(PreferenceKeys.demoStartedAt),
+      now.toIso8601String(),
+    );
+    expect(
       preferences.getString(PreferenceKeys.demoLastRun),
       now.toIso8601String(),
     );
+    expect(license.expirationDate, now.add(demoDuration));
   });
 
-  test('bloquea la demo después de su vencimiento', () async {
+  test('mantiene la fecha original de inicio en arranques posteriores', () async {
+    final startedAt = DateTime(2026, 7, 1, 12);
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.demoStartedAt: startedAt.toIso8601String(),
+    });
     final preferences = await SharedPreferences.getInstance();
     final controller = DemoLicenseController(
       SettingsRepository(preferences),
-      expirationDate: expirationDate,
+      demoDuration: demoDuration,
     );
 
-    final license = await controller.validate(now: DateTime(2026, 7, 17));
+    final license = await controller.validate(now: DateTime(2026, 7, 5, 8));
+
+    expect(license.status, DemoLicenseStatus.active);
+    expect(
+      preferences.getString(PreferenceKeys.demoStartedAt),
+      startedAt.toIso8601String(),
+    );
+    expect(license.expirationDate, startedAt.add(demoDuration));
+  });
+
+  test('bloquea la demo al completar los 15 días', () async {
+    final startedAt = DateTime(2026, 7, 1, 12);
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.demoStartedAt: startedAt.toIso8601String(),
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final controller = DemoLicenseController(
+      SettingsRepository(preferences),
+      demoDuration: demoDuration,
+    );
+
+    final license = await controller.validate(
+      now: startedAt.add(demoDuration),
+    );
 
     expect(license.status, DemoLicenseStatus.expired);
     expect(preferences.getBool(PreferenceKeys.demoLocked), isTrue);
@@ -49,7 +81,7 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
     final controller = DemoLicenseController(
       SettingsRepository(preferences),
-      expirationDate: expirationDate,
+      demoDuration: demoDuration,
     );
 
     final license = await controller.validate(
@@ -68,7 +100,7 @@ void main() {
     final preferences = await SharedPreferences.getInstance();
     final controller = DemoLicenseController(
       SettingsRepository(preferences),
-      expirationDate: expirationDate,
+      demoDuration: demoDuration,
     );
 
     final license = await controller.resetForDevelopment(
@@ -77,6 +109,10 @@ void main() {
 
     expect(license.status, DemoLicenseStatus.active);
     expect(preferences.getBool(PreferenceKeys.demoLocked), isNull);
+    expect(
+      preferences.getString(PreferenceKeys.demoStartedAt),
+      DateTime(2026, 7, 1).toIso8601String(),
+    );
     expect(
       preferences.getString(PreferenceKeys.demoLastRun),
       DateTime(2026, 7, 1).toIso8601String(),

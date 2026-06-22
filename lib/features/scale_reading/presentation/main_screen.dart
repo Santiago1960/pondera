@@ -10,7 +10,13 @@ import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../../app/pondera_header.dart';
+import '../../../core/config/app_config.dart';
 import '../../connection/domain/connection_type.dart';
+import '../../connection/presentation/connection_diagnostics_panel.dart';
+import '../../connection/presentation/connection_settings_panel.dart';
+import '../../connection/presentation/connection_status_panel.dart';
+import '../../keyboard_output/presentation/keyboard_settings_panel.dart';
 import '../../license/application/activation_request_service.dart';
 import '../../license/application/demo_license_controller.dart';
 import '../../license/application/offline_license_controller.dart';
@@ -23,17 +29,29 @@ import '../../license/data/offline_license_repository.dart';
 import '../../license/domain/demo_license.dart';
 import '../../license/domain/license_verification_result.dart';
 import '../../license/presentation/activation_request_dialog.dart';
+import '../../license/presentation/license_status_panel.dart';
+import '../../recipe/presentation/recipe_actions_panel.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_parser.dart';
 import '../domain/weight_converter.dart';
 import '../domain/weight_unit.dart';
+import 'current_weight_panel.dart';
+import 'raw_data_log_panel.dart';
+import 'units_settings_panel.dart';
 
 const MethodChannel _windowsKeyboardChannel = MethodChannel(
   'pondera/windows_keyboard',
 );
 
 class MainScreen extends StatefulWidget {
-  const MainScreen({super.key});
+  const MainScreen({
+    required this.themeMode,
+    required this.onThemeModeChanged,
+    super.key,
+  });
+
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeModeChanged;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -54,24 +72,25 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _pollingTimer;
   Timer? _reconnectTimer;
   Timer? _demoTimer;
+  Timer? _telemetryRefreshTimer;
   bool _isConnected = false;
   bool _isTyping = false;
   bool _manualDisconnectRequested = false;
 
   DateTime? _lastTypedTime;
-  final List<String> _receivedDataLog = [];
+  final List<RawDataLogEntry> _receivedDataLog = [];
+  int _receptionSequence = 0;
 
   String _savedRegex = '';
   String _cleanWeightDisplay = '---';
   String _uiStatusMessage = 'Desconectado';
   String _networkAccumulator = '';
   String _networkDiagnostics = 'Sin actividad de red.';
-  String _n8nDiagnostics = 'n8n: sin petición enviada.';
   int _pollRequestsSent = 0;
   int _bytesReceived = 0;
   int _serialIgnoredBytes = 0;
   bool _isPollingIndicator = false;
-  bool _lastN8nRequestUsedUntrustedCertificate = false;
+  bool _isSendingToN8n = false;
   bool _isDemoExpired = false;
   String _demoStatusMessage = '';
 
@@ -138,6 +157,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void dispose() {
     _demoTimer?.cancel();
+    _telemetryRefreshTimer?.cancel();
     _disconnect();
     _ipController.dispose();
     _portController.dispose();
@@ -521,30 +541,21 @@ class _MainScreenState extends State<MainScreen> {
       'trama': rawData,
       'valor_esperado': expectedValue,
     });
-    _lastN8nRequestUsedUntrustedCertificate = false;
-
     try {
       return await http
           .post(uri, headers: headers, body: body)
-          .timeout(const Duration(seconds: 12));
+          .timeout(AppConfig.n8nRequestTimeout);
     } on HandshakeException catch (e) {
       if (!_allowUntrustedN8nCertificateFallback ||
           !_isCertificateTrustError(e)) {
         rethrow;
       }
 
-      if (mounted) {
-        setState(() {
-          _n8nDiagnostics =
-              'n8n: certificado no confiable detectado. Reintentando solo para ${uri.host}...';
-        });
-      }
-
       final expectedPort = uri.hasPort
           ? uri.port
           : (uri.scheme == 'https' ? 443 : 80);
       final httpClient = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 12)
+        ..connectionTimeout = AppConfig.n8nRequestTimeout
         ..badCertificateCallback = (certificate, host, port) {
           return host == uri.host && port == expectedPort;
         };
@@ -552,8 +563,7 @@ class _MainScreenState extends State<MainScreen> {
       try {
         final response = await client
             .post(uri, headers: headers, body: body)
-            .timeout(const Duration(seconds: 12));
-        _lastN8nRequestUsedUntrustedCertificate = true;
+            .timeout(AppConfig.n8nRequestTimeout);
         return response;
       } finally {
         client.close();
@@ -616,6 +626,9 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _sendToN8nIa() async {
+    if (_isSendingToN8n) {
+      return;
+    }
     if (_isDemoExpired) {
       ScaffoldMessenger.of(
         context,
@@ -628,7 +641,7 @@ class _MainScreenState extends State<MainScreen> {
       );
       return;
     }
-    final rawData = _receivedDataLog.last;
+    final rawData = _receivedDataLog.last.rawData;
     final expectedValue = await _requestExpectedValue();
     if (expectedValue == null || !mounted) {
       return;
@@ -636,28 +649,13 @@ class _MainScreenState extends State<MainScreen> {
 
     if (mounted) {
       setState(() {
+        _isSendingToN8n = true;
         _uiStatusMessage = 'Enviando muestra a n8n...';
-        _n8nDiagnostics =
-            'n8n: enviando POST a $_n8nUrl | Valor esperado: $expectedValue';
       });
     }
 
     try {
       final response = await _postToN8n(rawData, expectedValue);
-
-      final String responsePreview = response.body.length > 180
-          ? '${response.body.substring(0, 180)}...'
-          : response.body;
-
-      if (mounted) {
-        setState(() {
-          final certNote = _lastN8nRequestUsedUntrustedCertificate
-              ? ' usando certificado no confiable aceptado'
-              : '';
-          _n8nDiagnostics =
-              'n8n: HTTP ${response.statusCode}$certNote. Respuesta: $responsePreview';
-        });
-      }
 
       if (response.statusCode == 200) {
         dynamic responseData;
@@ -668,8 +666,6 @@ class _MainScreenState extends State<MainScreen> {
             setState(() {
               _uiStatusMessage =
                   'n8n respondió 200, pero no envió JSON válido.';
-              _n8nDiagnostics =
-                  'n8n: JSON inválido. Respuesta: $responsePreview';
             });
           }
           return;
@@ -679,14 +675,24 @@ class _MainScreenState extends State<MainScreen> {
             setState(() {
               _uiStatusMessage =
                   'n8n respondió 200, pero el JSON no es un objeto.';
-              _n8nDiagnostics =
-                  'n8n: estructura inesperada. Respuesta: $responsePreview';
             });
           }
           return;
         }
-        String newRegex = responseData['regex_pattern'] ?? '';
+        final regexValue = responseData['regex_pattern'];
+        final newRegex = regexValue is String ? regexValue.trim() : '';
         if (newRegex.isNotEmpty) {
+          try {
+            RegExp(newRegex);
+          } on FormatException {
+            if (mounted) {
+              setState(() {
+                _uiStatusMessage = 'n8n devolvió una receta Regex inválida.';
+              });
+            }
+            return;
+          }
+
           await _settingsRepository.saveRecipe(
             pattern: newRegex,
             expectedValue: expectedValue,
@@ -696,14 +702,6 @@ class _MainScreenState extends State<MainScreen> {
               _savedRegex = newRegex;
               _expectedValue = expectedValue;
               _uiStatusMessage = '¡Receta Regex guardada con éxito!';
-              final reading = ReadingParser.parse(
-                rawData,
-                pattern: _savedRegex,
-                expectedValue: expectedValue,
-              );
-              if (reading != null) {
-                _cleanWeightDisplay = reading.formattedWeight;
-              }
             });
           }
         } else if (mounted) {
@@ -717,12 +715,24 @@ class _MainScreenState extends State<MainScreen> {
           _uiStatusMessage = 'n8n respondió HTTP ${response.statusCode}.';
         });
       }
+    } on TimeoutException catch (e) {
+      debugPrint('Timeout esperando respuesta de n8n: $e');
+      if (mounted) {
+        setState(() {
+          _uiStatusMessage = 'n8n tardó más de 45 segundos en responder.';
+        });
+      }
     } catch (e) {
       debugPrint('Error de conexión con n8n: $e');
       if (mounted) {
         setState(() {
           _uiStatusMessage = 'Error de conexión con n8n.';
-          _n8nDiagnostics = 'n8n: error enviando POST: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSendingToN8n = false;
         });
       }
     }
@@ -844,19 +854,33 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     _networkAccumulator += chunk;
+    if (_networkAccumulator.length > AppConfig.maxScaleAccumulatorCharacters) {
+      _networkAccumulator = _networkAccumulator.substring(
+        _networkAccumulator.length - AppConfig.maxScaleAccumulatorCharacters,
+      );
+    }
     _bytesReceived += byteCount;
 
-    if (mounted) {
-      setState(() {
-        final ignoredNote = _serialIgnoredBytes > 0
-            ? ' | Bytes ignorados: $_serialIgnoredBytes'
-            : '';
-        _networkDiagnostics =
-            'Polling enviados: $_pollRequestsSent | Bytes útiles recibidos: $_bytesReceived | Último bloque $sourceLabel: $byteCount bytes$ignoredNote';
-      });
-    }
+    final ignoredNote = _serialIgnoredBytes > 0
+        ? ' | Bytes ignorados: $_serialIgnoredBytes'
+        : '';
+    _networkDiagnostics =
+        'Polling enviados: $_pollRequestsSent | Bytes útiles recibidos: $_bytesReceived | Último bloque $sourceLabel: $byteCount bytes$ignoredNote';
+    _scheduleTelemetryRefresh();
 
     _processAccumulatedData();
+  }
+
+  void _scheduleTelemetryRefresh() {
+    if (!mounted || _telemetryRefreshTimer?.isActive == true) {
+      return;
+    }
+
+    _telemetryRefreshTimer = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   String _activeDeviceLabel() {
@@ -987,12 +1011,9 @@ end tell
             _socket?.write('P\r\n');
             await _socket?.flush();
             _pollRequestsSent++;
-            if (mounted) {
-              setState(() {
-                _networkDiagnostics =
-                    'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived';
-              });
-            }
+            _networkDiagnostics =
+                'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived';
+            _scheduleTelemetryRefresh();
           } catch (e) {
             debugPrint('Error enviando polling: $e');
             _handleDisconnect('Error enviando polling: $e');
@@ -1081,20 +1102,16 @@ end tell
           }
 
           if (cleanedChunk.text.isEmpty) {
-            if (mounted) {
-              setState(() {
-                _networkDiagnostics =
-                    'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
-              });
-            }
+            _networkDiagnostics =
+                'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
+            _scheduleTelemetryRefresh();
             return;
           }
 
-          if (cleanedChunk.ignoredBytes > 0 && mounted) {
-            setState(() {
-              _networkDiagnostics =
-                  'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
-            });
+          if (cleanedChunk.ignoredBytes > 0) {
+            _networkDiagnostics =
+                'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
+            _scheduleTelemetryRefresh();
           }
 
           _appendIncomingChunk(
@@ -1122,14 +1139,14 @@ end tell
       return;
     }
 
-    if (mounted) {
-      setState(() {
-        _receivedDataLog.add(_networkAccumulator);
-        if (_receivedDataLog.length > 25) {
-          _receivedDataLog.removeAt(0);
-        }
-      });
+    _receivedDataLog.add(
+      RawDataLogEntry(rawData: _networkAccumulator, receivedAt: DateTime.now()),
+    );
+    _receptionSequence++;
+    if (_receivedDataLog.length > 3) {
+      _receivedDataLog.removeAt(0);
     }
+    _scheduleTelemetryRefresh();
 
     if (_savedRegex.isNotEmpty) {
       final reading = ReadingParser.parse(
@@ -1144,12 +1161,9 @@ end tell
         final parsedWeight = reading.numericValue;
 
         if (parsedWeight != null && parsedWeight == 0.0) {
-          if (mounted) {
-            setState(() {
-              _cleanWeightDisplay =
-                  '$nuevoPesoOriginal ${_selectedInputUnit.label}';
-            });
-          }
+          _cleanWeightDisplay =
+              '$nuevoPesoOriginal ${_selectedInputUnit.label}';
+          _scheduleTelemetryRefresh();
           return;
         }
 
@@ -1176,12 +1190,9 @@ end tell
           _isTyping = true;
           _lastTypedTime = now;
 
-          if (mounted) {
-            setState(() {
-              _cleanWeightDisplay =
-                  '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
-            });
-          }
+          _cleanWeightDisplay =
+              '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
+          _scheduleTelemetryRefresh();
 
           await _writeWeightToCursor(pesoFinalAInyectar);
           _isTyping = false;
@@ -1254,679 +1265,157 @@ end tell
   @override
   Widget build(BuildContext context) {
     final bool showingConnected = _isConnected;
+    final licensePayload = _offlineLicenseResult?.payload;
     return Scaffold(
-      appBar: AppBar(title: const Text('Pondera - Control Activo por Polling')),
+      appBar: AppBar(
+        title: const PonderaHeader(),
+        actions: [
+          PonderaThemeSelector(
+            themeMode: widget.themeMode,
+            onChanged: widget.onThemeModeChanged,
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(20.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Card(
-                color: Colors.blueGrey.shade900,
-                child: Padding(
-                  padding: const EdgeInsets.all(15.0),
-                  child: Column(
-                    children: [
-                      const Text(
-                        'PESO FILTRADO Y CONVERTIDO EN PONDERA',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.blueAccent,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        _cleanWeightDisplay,
-                        style: const TextStyle(
-                          fontSize: 36,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.amberAccent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+              CurrentWeightPanel(weightDisplay: _cleanWeightDisplay),
+              const SizedBox(height: 10),
+              ConnectionStatusPanel(
+                activeDeviceLabel: _activeDeviceLabel(),
+                uiStatusMessage: _uiStatusMessage,
+                isConnected: showingConnected,
+                isInteractionBlocked: _isDemoExpired,
+                onToggleConnection: showingConnected ? _disconnect : _connect,
               ),
               const SizedBox(height: 10),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Configuración de Enlace (Balanza Industrial)',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blueAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<ConnectionType>(
-                        initialValue: _selectedConnectionType,
-                        decoration: const InputDecoration(
-                          labelText: 'Tipo de conexión',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                        items: ConnectionType.values.map((type) {
-                          return DropdownMenuItem(
-                            value: type,
-                            child: Text(
-                              connectionTypeLabels[type] ?? type.name,
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: showingConnected
-                            ? null
-                            : (value) {
-                                if (value != null) {
-                                  _saveConnectionType(value);
-                                }
-                              },
-                      ),
-                      const SizedBox(height: 10),
-                      if (_selectedConnectionType == ConnectionType.ethernet)
-                        Row(
-                          children: [
-                            Expanded(
-                              flex: 3,
-                              child: TextField(
-                                controller: _ipController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Dirección IP',
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
-                                ),
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontFamily: 'Courier',
-                                ),
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              flex: 2,
-                              child: TextField(
-                                controller: _portController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Puerto TCP',
-                                  border: OutlineInputBorder(),
-                                  isDense: true,
-                                ),
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontFamily: 'Courier',
-                                ),
-                                keyboardType: TextInputType.number,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            ElevatedButton(
-                              onPressed: _saveNetworkConfig,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blueGrey.shade700,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 16,
-                                  horizontal: 12,
-                                ),
-                              ),
-                              child: const Icon(Icons.save_sharp, size: 18),
-                            ),
-                          ],
-                        ),
-                      if (_selectedConnectionType == ConnectionType.serial)
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  flex: 3,
-                                  child: TextField(
-                                    controller: _serialPortController,
-                                    decoration: InputDecoration(
-                                      labelText: Platform.isWindows
-                                          ? 'Puerto serial (ej. COM3)'
-                                          : 'Puerto serial',
-                                      border: const OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontFamily: 'Courier',
-                                    ),
-                                    onChanged: (value) =>
-                                        _serialPortName = value.trim(),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  flex: 2,
-                                  child: DropdownButtonFormField<String>(
-                                    initialValue:
-                                        _availableSerialPorts.contains(
-                                          _serialPortName,
-                                        )
-                                        ? _serialPortName
-                                        : null,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Detectados',
-                                      border: OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    items: _availableSerialPorts.map((port) {
-                                      return DropdownMenuItem(
-                                        value: port,
-                                        child: Text(port),
-                                      );
-                                    }).toList(),
-                                    onChanged: (value) {
-                                      if (value == null) {
-                                        return;
-                                      }
-                                      setState(() {
-                                        _serialPortName = value;
-                                        _serialPortController.text = value;
-                                      });
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                IconButton(
-                                  onPressed: _refreshSerialPorts,
-                                  tooltip: 'Actualizar puertos',
-                                  icon: const Icon(Icons.refresh),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: DropdownButtonFormField<int>(
-                                    initialValue:
-                                        _baudRates.contains(_serialBaudRate)
-                                        ? _serialBaudRate
-                                        : 9600,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Baud rate',
-                                      border: OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    items: _baudRates
-                                        .map(
-                                          (rate) => DropdownMenuItem(
-                                            value: rate,
-                                            child: Text(rate.toString()),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) => setState(
-                                      () => _serialBaudRate = value ?? 9600,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: DropdownButtonFormField<int>(
-                                    initialValue:
-                                        _dataBitsOptions.contains(
-                                          _serialDataBits,
-                                        )
-                                        ? _serialDataBits
-                                        : 8,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Data bits',
-                                      border: OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    items: _dataBitsOptions
-                                        .map(
-                                          (bits) => DropdownMenuItem(
-                                            value: bits,
-                                            child: Text(bits.toString()),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) => setState(
-                                      () => _serialDataBits = value ?? 8,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    initialValue:
-                                        _parityLabels.containsKey(_serialParity)
-                                        ? _serialParity
-                                        : 'none',
-                                    decoration: const InputDecoration(
-                                      labelText: 'Paridad',
-                                      border: OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    items: _parityLabels.entries
-                                        .map(
-                                          (entry) => DropdownMenuItem(
-                                            value: entry.key,
-                                            child: Text(entry.value),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) => setState(
-                                      () => _serialParity = value ?? 'none',
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: DropdownButtonFormField<int>(
-                                    initialValue:
-                                        _stopBitsOptions.contains(
-                                          _serialStopBits,
-                                        )
-                                        ? _serialStopBits
-                                        : 1,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Stop bits',
-                                      border: OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    items: _stopBitsOptions
-                                        .map(
-                                          (bits) => DropdownMenuItem(
-                                            value: bits,
-                                            child: Text(bits.toString()),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) => setState(
-                                      () => _serialStopBits = value ?? 1,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: DropdownButtonFormField<String>(
-                                    initialValue:
-                                        _flowControlLabels.containsKey(
-                                          _serialFlowControl,
-                                        )
-                                        ? _serialFlowControl
-                                        : 'none',
-                                    decoration: const InputDecoration(
-                                      labelText: 'Flow control',
-                                      border: OutlineInputBorder(),
-                                      isDense: true,
-                                    ),
-                                    items: _flowControlLabels.entries
-                                        .map(
-                                          (entry) => DropdownMenuItem(
-                                            value: entry.key,
-                                            child: Text(entry.value),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: (value) => setState(
-                                      () =>
-                                          _serialFlowControl = value ?? 'none',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: ElevatedButton(
-                                onPressed: _saveSerialConfig,
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.blueGrey.shade700,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                    horizontal: 12,
-                                  ),
-                                ),
-                                child: const Icon(Icons.save_sharp, size: 18),
-                              ),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
+              RawDataLogPanel(
+                entries: _receivedDataLog,
+                receptionSequence: _receptionSequence,
               ),
               const SizedBox(height: 10),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Configuración de Unidades de Medida',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blueAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: DropdownButtonFormField<WeightUnit>(
-                              initialValue: _selectedInputUnit,
-                              decoration: const InputDecoration(
-                                labelText: 'Origen Balanza',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              items: _inputUnits.map((unit) {
-                                return DropdownMenuItem(
-                                  value: unit,
-                                  child: Text(unit.label),
-                                );
-                              }).toList(),
-                              onChanged: (val) {
-                                setState(() {
-                                  _selectedInputUnit =
-                                      val ?? WeightUnit.kilogram;
-                                  _saveUnitsConfig();
-                                });
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 15),
-                          Expanded(
-                            child: DropdownButtonFormField<WeightUnit>(
-                              initialValue: _selectedOutputUnit,
-                              decoration: const InputDecoration(
-                                labelText: 'Destino Escritura',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              items: _outputUnits.map((unit) {
-                                return DropdownMenuItem(
-                                  value: unit,
-                                  child: Text(unit.label),
-                                );
-                              }).toList(),
-                              onChanged: (val) {
-                                setState(() {
-                                  _selectedOutputUnit =
-                                      val ?? WeightUnit.kilogram;
-                                  _saveUnitsConfig();
-                                });
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+              ConnectionDiagnosticsPanel(
+                networkDiagnostics: _networkDiagnostics,
               ),
               const SizedBox(height: 10),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Comandos de Teclado (Ej: {TAB}, {ENTER}, {SPACE}, {AHORA})',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blueAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _prefixController,
-                              decoration: const InputDecoration(
-                                labelText: 'Prefijo',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontFamily: 'Courier',
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextField(
-                              controller: _suffixController,
-                              decoration: const InputDecoration(
-                                labelText: 'Sufijo',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontFamily: 'Courier',
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          ElevatedButton(
-                            onPressed: _saveKeyModifiers,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.blueGrey.shade700,
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 16,
-                                horizontal: 12,
-                              ),
-                            ),
-                            child: const Icon(Icons.save, size: 18),
-                          ),
-                        ],
-                      ),
-                    ],
+              LicenseStatusPanel(
+                statusMessage: _demoStatusMessage,
+                isExpired: _isDemoExpired,
+                customerDetails: licensePayload == null
+                    ? null
+                    : '${licensePayload.customerName} · ${licensePayload.siteName} · ${licensePayload.city}',
+                deviceDetails: licensePayload == null
+                    ? null
+                    : '${licensePayload.deviceLabel} · Licencia ${licensePayload.licenseId}',
+                showResetDemoAction:
+                    kDebugMode &&
+                    _isDemoExpired &&
+                    _offlineLicenseResult?.status ==
+                        LicenseVerificationStatus.missing,
+                onResetDemo: _resetDemoForDevelopment,
+                onGenerateActivationRequest: _generateActivationRequest,
+                onImportLicense: _importOfflineLicense,
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Icon(
+                    Icons.tune,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Configuración',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ConnectionSettingsPanel(
+                selectedConnectionType: _selectedConnectionType,
+                isConnected: showingConnected,
+                ipController: _ipController,
+                portController: _portController,
+                serialPortController: _serialPortController,
+                serialPortName: _serialPortName,
+                availableSerialPorts: _availableSerialPorts,
+                serialBaudRate: _serialBaudRate,
+                serialDataBits: _serialDataBits,
+                serialStopBits: _serialStopBits,
+                serialParity: _serialParity,
+                serialFlowControl: _serialFlowControl,
+                baudRates: _baudRates,
+                dataBitsOptions: _dataBitsOptions,
+                stopBitsOptions: _stopBitsOptions,
+                parityLabels: _parityLabels,
+                flowControlLabels: _flowControlLabels,
+                onConnectionTypeChanged: _saveConnectionType,
+                onSaveNetwork: _saveNetworkConfig,
+                onSerialPortNameChanged: (value) {
+                  _serialPortName = value.trim();
+                },
+                onDetectedSerialPortChanged: (value) {
+                  setState(() {
+                    _serialPortName = value;
+                    _serialPortController.text = value;
+                  });
+                },
+                onRefreshSerialPorts: _refreshSerialPorts,
+                onSerialBaudRateChanged: (value) {
+                  setState(() => _serialBaudRate = value);
+                },
+                onSerialDataBitsChanged: (value) {
+                  setState(() => _serialDataBits = value);
+                },
+                onSerialStopBitsChanged: (value) {
+                  setState(() => _serialStopBits = value);
+                },
+                onSerialParityChanged: (value) {
+                  setState(() => _serialParity = value);
+                },
+                onSerialFlowControlChanged: (value) {
+                  setState(() => _serialFlowControl = value);
+                },
+                onSaveSerial: _saveSerialConfig,
               ),
               const SizedBox(height: 10),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(15.0),
-                  child: Column(
-                    children: [
-                      Text(
-                        'Dispositivo de destino activo: ${_activeDeviceLabel()}',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white70,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        _demoStatusMessage,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: _isDemoExpired
-                              ? Colors.redAccent
-                              : Colors.lightGreenAccent,
-                        ),
-                      ),
-                      if (_offlineLicenseResult?.payload
-                          case final payload?) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          '${payload.customerName} · ${payload.siteName} · ${payload.city}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
-                          ),
-                        ),
-                        Text(
-                          '${payload.deviceLabel} · Licencia ${payload.licenseId}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.white70,
-                          ),
-                        ),
-                      ],
-                      if (kDebugMode &&
-                          _isDemoExpired &&
-                          _offlineLicenseResult?.status ==
-                              LicenseVerificationStatus.missing)
-                        TextButton.icon(
-                          onPressed: _resetDemoForDevelopment,
-                          icon: const Icon(Icons.restart_alt),
-                          label: const Text('Restablecer demo (desarrollo)'),
-                        ),
-                      OutlinedButton.icon(
-                        onPressed: _generateActivationRequest,
-                        icon: const Icon(Icons.description_outlined),
-                        label: const Text('Generar solicitud de activación'),
-                      ),
-                      FilledButton.tonalIcon(
-                        onPressed: _importOfflineLicense,
-                        icon: const Icon(Icons.verified_user_outlined),
-                        label: const Text('Importar licencia'),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        'Estado: $_uiStatusMessage',
-                        style: TextStyle(
-                          color: showingConnected
-                              ? Colors.green
-                              : Colors.orange,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        _networkDiagnostics,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white60,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        _n8nDiagnostics,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white60,
-                        ),
-                      ),
-                      const SizedBox(height: 15),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          ElevatedButton(
-                            onPressed: _isDemoExpired
-                                ? null
-                                : (showingConnected ? _disconnect : _connect),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: showingConnected
-                                  ? Colors.red.shade700
-                                  : Colors.blue.shade700,
-                            ),
-                            child: Text(
-                              showingConnected
-                                  ? 'Desconectar'
-                                  : 'Conectar Indicador',
-                            ),
-                          ),
-                          ElevatedButton(
-                            onPressed: _isDemoExpired ? null : _sendToN8nIa,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.purple.shade700,
-                            ),
-                            child: const Text('Enviar Trama a n8n'),
-                          ),
-                          if (_savedRegex.isNotEmpty)
-                            TextButton(
-                              onPressed: _clearRecipe,
-                              child: const Text(
-                                'Limpiar Receta',
-                                style: TextStyle(color: Colors.red),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+              UnitsSettingsPanel(
+                selectedInputUnit: _selectedInputUnit,
+                selectedOutputUnit: _selectedOutputUnit,
+                inputUnits: _inputUnits,
+                outputUnits: _outputUnits,
+                onInputUnitChanged: (unit) {
+                  setState(() {
+                    _selectedInputUnit = unit;
+                    _saveUnitsConfig();
+                  });
+                },
+                onOutputUnitChanged: (unit) {
+                  setState(() {
+                    _selectedOutputUnit = unit;
+                    _saveUnitsConfig();
+                  });
+                },
               ),
               const SizedBox(height: 10),
-              Text(
-                'Receta Regex activa: $_savedRegex',
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontStyle: FontStyle.italic,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(height: 15),
-              const Text(
-                'Tramas recibidas en bruto (Data Log):',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              KeyboardSettingsPanel(
+                prefixController: _prefixController,
+                suffixController: _suffixController,
+                onSave: _saveKeyModifiers,
               ),
               const SizedBox(height: 10),
-              SizedBox(
-                height: 260,
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(5),
-                    border: Border.all(color: Colors.grey.shade800),
-                  ),
-                  child: _receivedDataLog.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'Esperando datos de la balanza...',
-                            style: TextStyle(
-                              color: Colors.white54,
-                              fontSize: 13,
-                            ),
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _receivedDataLog.length,
-                          reverse: true,
-                          itemBuilder: (context, index) {
-                            final logEntry =
-                                _receivedDataLog[_receivedDataLog.length -
-                                    1 -
-                                    index];
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 2.0,
-                              ),
-                              child: Text(
-                                logEntry
-                                    .replaceAll('\r', '\\r')
-                                    .replaceAll('\n', '\\n'),
-                                style: const TextStyle(
-                                  color: Colors.green,
-                                  fontFamily: 'Courier',
-                                  fontSize: 12,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
+              RecipeActionsPanel(
+                savedRegex: _savedRegex,
+                isEnabled: !_isDemoExpired,
+                isProcessing: _isSendingToN8n,
+                onSendToN8n: _sendToN8nIa,
+                onClearRecipe: _clearRecipe,
               ),
             ],
           ),

@@ -20,6 +20,7 @@ void main() {
     expect(settings.outputUnit, 'kg');
     expect(settings.recipePattern, isEmpty);
     expect(settings.expectedValue, isEmpty);
+    expect(SettingsRepository(preferences).loadThemeMode(), 'system');
   });
 
   test('carga valores persistidos', () async {
@@ -30,6 +31,7 @@ void main() {
       PreferenceKeys.expectedValue: ' 0,130 ',
       PreferenceKeys.inputUnit: 'lb',
       PreferenceKeys.outputUnit: 'g',
+      PreferenceKeys.themeMode: 'dark',
     });
     final preferences = await SharedPreferences.getInstance();
     final settings = SettingsRepository(preferences).load();
@@ -40,6 +42,7 @@ void main() {
     expect(settings.expectedValue, '0,130');
     expect(settings.inputUnit, 'lb');
     expect(settings.outputUnit, 'g');
+    expect(SettingsRepository(preferences).loadThemeMode(), 'dark');
   });
 
   test('guarda configuración y receta', () async {
@@ -49,11 +52,39 @@ void main() {
     await repository.saveNetwork(ip: '10.0.0.9', port: 5000);
     await repository.saveUnits(inputUnit: 'kg', outputUnit: 'mg');
     await repository.saveRecipe(pattern: r'\d+[.,]\d+', expectedValue: '0.130');
+    await repository.saveThemeMode('light');
+    await repository.saveDemoStartedAt(DateTime(2026, 7, 1, 12));
+    await repository.saveDemoLastRun(DateTime(2026, 7, 2, 8));
 
     expect(preferences.getString(PreferenceKeys.ip), '10.0.0.9');
     expect(preferences.getInt(PreferenceKeys.port), 5000);
     expect(preferences.getString(PreferenceKeys.outputUnit), 'mg');
     expect(preferences.getString(PreferenceKeys.recipe), r'\d+[.,]\d+');
     expect(preferences.getString(PreferenceKeys.expectedValue), '0.130');
+    expect(preferences.getString(PreferenceKeys.themeMode), 'light');
+    expect(
+      preferences.getString(PreferenceKeys.demoStartedAt),
+      DateTime(2026, 7, 1, 12).toIso8601String(),
+    );
+    expect(
+      preferences.getString(PreferenceKeys.demoLastRun),
+      DateTime(2026, 7, 2, 8).toIso8601String(),
+    );
+  });
+
+  test('restablece el estado de demo', () async {
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.demoLocked: true,
+      PreferenceKeys.demoStartedAt: DateTime(2026, 7, 1, 12).toIso8601String(),
+      PreferenceKeys.demoLastRun: DateTime(2026, 7, 2, 8).toIso8601String(),
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final repository = SettingsRepository(preferences);
+
+    await repository.resetDemo();
+
+    expect(preferences.getBool(PreferenceKeys.demoLocked), isNull);
+    expect(preferences.getString(PreferenceKeys.demoStartedAt), isNull);
+    expect(preferences.getString(PreferenceKeys.demoLastRun), isNull);
   });
 }

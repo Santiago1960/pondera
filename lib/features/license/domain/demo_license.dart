@@ -35,7 +35,7 @@ class DemoLicense {
         status: DemoLicenseStatus.clockTampered,
       );
     }
-    if (locked || now.isAfter(expirationDate)) {
+    if (locked || !now.isBefore(expirationDate)) {
       return DemoLicense(
         expirationDate: expirationDate,
         status: DemoLicenseStatus.expired,
