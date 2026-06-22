@@ -9,6 +9,7 @@ import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../app/pondera_header.dart';
 import '../../../core/config/app_config.dart';
@@ -58,6 +59,8 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  static const _userManualAssetPath = 'assets/help/pondera_manual_usuario.pdf';
+
   ConnectionType _selectedConnectionType = ConnectionType.ethernet;
   String _deviceIp = '192.168.100.134';
   int _devicePort = 3004;
@@ -93,6 +96,8 @@ class _MainScreenState extends State<MainScreen> {
   bool _isSendingToN8n = false;
   bool _isDemoExpired = false;
   String _demoStatusMessage = '';
+  String _installationId = '';
+  String _appVersion = '';
 
   String _serialPortName = '';
   int _serialBaudRate = 9600;
@@ -170,6 +175,11 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _initialize() async {
     _settingsRepository = await SettingsRepository.create();
     final identityRepository = await InstallationIdentityRepository.create();
+    _installationId = await identityRepository.getOrCreate();
+    final packageInfo = await PackageInfo.fromPlatform();
+    _appVersion = packageInfo.buildNumber.isEmpty
+        ? packageInfo.version
+        : '${packageInfo.version}+${packageInfo.buildNumber}';
     _activationRequestService = ActivationRequestService(identityRepository);
     _offlineLicenseController = OfflineLicenseController(
       identityRepository,
@@ -182,6 +192,13 @@ class _MainScreenState extends State<MainScreen> {
         offlineLicense.status == LicenseVerificationStatus.missing
         ? await _demoLicenseController.validate()
         : null;
+    final shouldClearRecipe = _shouldClearRecipeForLicenseState(
+      offlineLicense: offlineLicense,
+      demoLicense: demoLicense,
+    );
+    if (shouldClearRecipe) {
+      await _clearRecipeStorage();
+    }
     final settings = _settingsRepository.load();
     final availablePorts = _listSerialPortsSafely();
     if (!mounted) {
@@ -259,10 +276,15 @@ class _MainScreenState extends State<MainScreen> {
       _isDemoExpired = !updatedLicense.isUsable;
       _demoStatusMessage = updatedLicense.message;
       if (_isDemoExpired) {
+        if (_shouldClearRecipeForOfflineLicense(updatedLicense)) {
+          await _clearRecipeStorage();
+        }
         _disconnect();
       }
       setState(() {
         if (_isDemoExpired) {
+          _savedRegex = '';
+          _expectedValue = '';
           _cleanWeightDisplay = 'Licencia vencida';
           _uiStatusMessage = updatedLicense.message;
           _networkDiagnostics =
@@ -287,8 +309,11 @@ class _MainScreenState extends State<MainScreen> {
     _demoLicense = updatedLicense;
     _isDemoExpired = updatedLicense.isExpired;
     _demoStatusMessage = updatedLicense.statusMessage;
+    await _clearRecipeStorage();
     _disconnect();
     setState(() {
+      _savedRegex = '';
+      _expectedValue = '';
       _cleanWeightDisplay = 'Demo vencida';
       _uiStatusMessage = _demoStatusMessage;
       _networkDiagnostics = 'La demo está bloqueada. No se abrirá conexión.';
@@ -382,6 +407,18 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
       if (!result.isUsable) {
+        if (_shouldClearRecipeForOfflineLicense(result)) {
+          await _clearRecipeStorage();
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _savedRegex = '';
+            _expectedValue = '';
+            _cleanWeightDisplay = 'Licencia vencida';
+            _uiStatusMessage = result.message;
+          });
+        }
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(result.message)));
@@ -534,12 +571,49 @@ class _MainScreenState extends State<MainScreen> {
         message.contains('unable to get local issuer certificate');
   }
 
+  Future<void> _openUserManual() async {
+    try {
+      final bytes = await rootBundle.load(_userManualAssetPath);
+      final supportDirectory = await getApplicationSupportDirectory();
+      final manualDirectory = Directory(
+        '${supportDirectory.path}${Platform.pathSeparator}help',
+      );
+      if (!await manualDirectory.exists()) {
+        await manualDirectory.create(recursive: true);
+      }
+      final manualFile = File(
+        '${manualDirectory.path}${Platform.pathSeparator}pondera_manual_usuario.pdf',
+      );
+      await manualFile.writeAsBytes(
+        bytes.buffer.asUint8List(),
+        flush: true,
+      );
+
+      if (Platform.isMacOS) {
+        await Process.run('open', [manualFile.path]);
+      } else if (Platform.isWindows) {
+        await Process.run('explorer.exe', [manualFile.path]);
+      } else {
+        throw UnsupportedError('Plataforma no soportada para abrir el manual.');
+      }
+    } catch (error) {
+      debugPrint('No se pudo abrir el manual de usuario: $error');
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo abrir el manual: $error')),
+      );
+    }
+  }
+
   Future<http.Response> _postToN8n(String rawData, String expectedValue) async {
     final uri = Uri.parse(_n8nUrl);
     final headers = {'Content-Type': 'application/json'};
     final body = jsonEncode({
       'trama': rawData,
       'valor_esperado': expectedValue,
+      'metadata': _buildN8nMetadata(),
     });
     try {
       return await http
@@ -569,6 +643,40 @@ class _MainScreenState extends State<MainScreen> {
         client.close();
       }
     }
+  }
+
+  Map<String, Object?> _buildN8nMetadata() {
+    final offlineLicense = _offlineLicenseResult;
+    final licensePayload = offlineLicense?.payload;
+    final demoLicense = _demoLicense;
+
+    return {
+      'installation_id': _installationId,
+      'app_version': _appVersion,
+      'platform': Platform.operatingSystem,
+      'license_mode': _resolveLicenseMode(),
+      'license_status': offlineLicense?.status.name,
+      'license_id': licensePayload?.licenseId,
+      'customer_id': licensePayload?.customerId,
+      'customer_name': licensePayload?.customerName,
+      'site_id': licensePayload?.siteId,
+      'site_name': licensePayload?.siteName,
+      'device_label': licensePayload?.deviceLabel,
+      'demo_expires_at': demoLicense?.expirationDate.toUtc().toIso8601String(),
+      'demo_status': demoLicense?.status.name,
+    };
+  }
+
+  String _resolveLicenseMode() {
+    final offlineLicense = _offlineLicenseResult;
+    if (offlineLicense != null &&
+        offlineLicense.status != LicenseVerificationStatus.missing) {
+      return offlineLicense.isUsable ? 'licensed' : 'license_blocked';
+    }
+    if (_demoLicense == null) {
+      return 'uninitialized';
+    }
+    return _demoLicense!.isExpired ? 'demo_expired' : 'demo';
   }
 
   Future<String?> _requestExpectedValue() async {
@@ -617,7 +725,7 @@ class _MainScreenState extends State<MainScreen> {
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Cancelar'),
             ),
-            FilledButton(onPressed: submit, child: const Text('Enviar a n8n')),
+            FilledButton(onPressed: submit, child: const Text('Enviar')),
           ],
         );
       },
@@ -742,9 +850,34 @@ class _MainScreenState extends State<MainScreen> {
     await _settingsRepository.clearRecipe();
     setState(() {
       _savedRegex = '';
+      _expectedValue = '';
       _cleanWeightDisplay = 'Sin receta';
       _uiStatusMessage = 'Receta eliminada.';
     });
+  }
+
+  bool _shouldClearRecipeForLicenseState({
+    required LicenseVerificationResult offlineLicense,
+    required DemoLicense? demoLicense,
+  }) {
+    if (_shouldClearRecipeForOfflineLicense(offlineLicense)) {
+      return true;
+    }
+    return offlineLicense.status == LicenseVerificationStatus.missing &&
+        (demoLicense?.isExpired ?? false);
+  }
+
+  bool _shouldClearRecipeForOfflineLicense(
+    LicenseVerificationResult result,
+  ) {
+    return result.status == LicenseVerificationStatus.expired;
+  }
+
+  Future<void> _clearRecipeStorage() async {
+    if (_savedRegex.isEmpty && _settingsRepository.load().recipePattern.isEmpty) {
+      return;
+    }
+    await _settingsRepository.clearRecipe();
   }
 
   String _appleScriptStringLiteral(String value) {
@@ -1270,6 +1403,11 @@ end tell
       appBar: AppBar(
         title: const PonderaHeader(),
         actions: [
+          IconButton(
+            tooltip: 'Abrir manual de ayuda',
+            onPressed: _openUserManual,
+            icon: const Icon(Icons.help_outline),
+          ),
           PonderaThemeSelector(
             themeMode: widget.themeMode,
             onChanged: widget.onThemeModeChanged,

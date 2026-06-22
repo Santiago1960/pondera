@@ -118,169 +118,217 @@ class ConnectionSettingsPanel extends StatelessWidget {
   }
 
   Widget _buildEthernetSettings() {
-    return Row(
-      children: [
-        Expanded(
-          flex: 3,
-          child: TextField(
-            controller: ipController,
-            decoration: const InputDecoration(
-              labelText: 'Dirección IP',
-              border: OutlineInputBorder(),
-              isDense: true,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final ipWidth = availableWidth >= 620
+            ? (availableWidth - 72) * 0.62
+            : availableWidth;
+        final portWidth = availableWidth >= 620
+            ? (availableWidth - 72) * 0.38
+            : availableWidth;
+
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.end,
+          children: [
+            SizedBox(
+              width: ipWidth.clamp(220.0, availableWidth),
+              child: TextField(
+                controller: ipController,
+                decoration: const InputDecoration(
+                  labelText: 'Dirección IP',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                style: const TextStyle(fontSize: 13, fontFamily: 'IBMPlexMono'),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+              ),
             ),
-            style: const TextStyle(fontSize: 13, fontFamily: 'IBMPlexMono'),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          flex: 2,
-          child: TextField(
-            controller: portController,
-            decoration: const InputDecoration(
-              labelText: 'Puerto TCP',
-              border: OutlineInputBorder(),
-              isDense: true,
+            SizedBox(
+              width: portWidth.clamp(160.0, availableWidth),
+              child: TextField(
+                controller: portController,
+                decoration: const InputDecoration(
+                  labelText: 'Puerto TCP',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                style: const TextStyle(fontSize: 13, fontFamily: 'IBMPlexMono'),
+                keyboardType: TextInputType.number,
+              ),
             ),
-            style: const TextStyle(fontSize: 13, fontFamily: 'IBMPlexMono'),
-            keyboardType: TextInputType.number,
-          ),
-        ),
-        const SizedBox(width: 10),
-        ElevatedButton(
-          onPressed: onSaveNetwork,
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-          ),
-          child: const Icon(Icons.save_sharp, size: 18),
-        ),
-      ],
+            ElevatedButton(
+              onPressed: onSaveNetwork,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                minimumSize: const Size(52, 52),
+              ),
+              child: const Icon(Icons.save_sharp, size: 18),
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _buildSerialSettings() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final longRowWidth = availableWidth >= 900
+            ? (availableWidth - 62) / 2
+            : availableWidth;
+        final shortFieldWidth = availableWidth >= 760
+            ? (availableWidth - 40) / 5
+            : availableWidth >= 520
+                ? (availableWidth - 20) / 3
+                : availableWidth;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              flex: 3,
-              child: TextField(
-                controller: serialPortController,
-                decoration: InputDecoration(
-                  labelText: Platform.isWindows
-                      ? 'Puerto serial (ej. COM3)'
-                      : 'Puerto serial',
-                  border: const OutlineInputBorder(),
-                  isDense: true,
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.end,
+              children: [
+                SizedBox(
+                  width: longRowWidth.clamp(240.0, availableWidth),
+                  child: TextField(
+                    controller: serialPortController,
+                    decoration: InputDecoration(
+                      labelText: Platform.isWindows
+                          ? 'Puerto serial (ej. COM3)'
+                          : 'Puerto serial',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontFamily: 'IBMPlexMono',
+                    ),
+                    onChanged: onSerialPortNameChanged,
+                  ),
                 ),
-                style: const TextStyle(fontSize: 13, fontFamily: 'IBMPlexMono'),
-                onChanged: onSerialPortNameChanged,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              flex: 2,
-              child: DropdownButtonFormField<String>(
-                initialValue: availableSerialPorts.contains(serialPortName)
-                    ? serialPortName
-                    : null,
-                decoration: const InputDecoration(
-                  labelText: 'Detectados',
-                  border: OutlineInputBorder(),
-                  isDense: true,
+                SizedBox(
+                  width: longRowWidth.clamp(220.0, availableWidth),
+                  child: DropdownButtonFormField<String>(
+                    isExpanded: true,
+                    initialValue: availableSerialPorts.contains(serialPortName)
+                        ? serialPortName
+                        : null,
+                    decoration: const InputDecoration(
+                      labelText: 'Detectados',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: availableSerialPorts.map((port) {
+                      return DropdownMenuItem(
+                        value: port,
+                        child: Text(
+                          port,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        onDetectedSerialPortChanged(value);
+                      }
+                    },
+                  ),
                 ),
-                items: availableSerialPorts.map((port) {
-                  return DropdownMenuItem(value: port, child: Text(port));
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    onDetectedSerialPortChanged(value);
-                  }
-                },
-              ),
+                IconButton(
+                  onPressed: onRefreshSerialPorts,
+                  tooltip: 'Actualizar puertos',
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
             ),
-            const SizedBox(width: 10),
-            IconButton(
-              onPressed: onRefreshSerialPorts,
-              tooltip: 'Actualizar puertos',
-              icon: const Icon(Icons.refresh),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                SizedBox(
+                  width: shortFieldWidth.clamp(140.0, availableWidth),
+                  child: _buildIntDropdown(
+                    value: baudRates.contains(serialBaudRate)
+                        ? serialBaudRate
+                        : 9600,
+                    label: 'Baud rate',
+                    options: baudRates,
+                    onChanged: onSerialBaudRateChanged,
+                  ),
+                ),
+                SizedBox(
+                  width: shortFieldWidth.clamp(132.0, availableWidth),
+                  child: _buildIntDropdown(
+                    value: dataBitsOptions.contains(serialDataBits)
+                        ? serialDataBits
+                        : 8,
+                    label: 'Data bits',
+                    options: dataBitsOptions,
+                    onChanged: onSerialDataBitsChanged,
+                  ),
+                ),
+                SizedBox(
+                  width: shortFieldWidth.clamp(138.0, availableWidth),
+                  child: _buildStringDropdown(
+                    value: parityLabels.containsKey(serialParity)
+                        ? serialParity
+                        : 'none',
+                    label: 'Paridad',
+                    options: parityLabels,
+                    onChanged: onSerialParityChanged,
+                  ),
+                ),
+                SizedBox(
+                  width: shortFieldWidth.clamp(132.0, availableWidth),
+                  child: _buildIntDropdown(
+                    value: stopBitsOptions.contains(serialStopBits)
+                        ? serialStopBits
+                        : 1,
+                    label: 'Stop bits',
+                    options: stopBitsOptions,
+                    onChanged: onSerialStopBitsChanged,
+                  ),
+                ),
+                SizedBox(
+                  width: shortFieldWidth.clamp(148.0, availableWidth),
+                  child: _buildStringDropdown(
+                    value: flowControlLabels.containsKey(serialFlowControl)
+                        ? serialFlowControl
+                        : 'none',
+                    label: 'Flow control',
+                    options: flowControlLabels,
+                    onChanged: onSerialFlowControlChanged,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton(
+                onPressed: onSaveSerial,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 16,
+                    horizontal: 12,
+                  ),
+                  minimumSize: const Size(52, 52),
+                ),
+                child: const Icon(Icons.save_sharp, size: 18),
+              ),
             ),
           ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: _buildIntDropdown(
-                value: baudRates.contains(serialBaudRate)
-                    ? serialBaudRate
-                    : 9600,
-                label: 'Baud rate',
-                options: baudRates,
-                onChanged: onSerialBaudRateChanged,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildIntDropdown(
-                value: dataBitsOptions.contains(serialDataBits)
-                    ? serialDataBits
-                    : 8,
-                label: 'Data bits',
-                options: dataBitsOptions,
-                onChanged: onSerialDataBitsChanged,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildStringDropdown(
-                value: parityLabels.containsKey(serialParity)
-                    ? serialParity
-                    : 'none',
-                label: 'Paridad',
-                options: parityLabels,
-                onChanged: onSerialParityChanged,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildIntDropdown(
-                value: stopBitsOptions.contains(serialStopBits)
-                    ? serialStopBits
-                    : 1,
-                label: 'Stop bits',
-                options: stopBitsOptions,
-                onChanged: onSerialStopBitsChanged,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _buildStringDropdown(
-                value: flowControlLabels.containsKey(serialFlowControl)
-                    ? serialFlowControl
-                    : 'none',
-                label: 'Flow control',
-                options: flowControlLabels,
-                onChanged: onSerialFlowControlChanged,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerRight,
-          child: ElevatedButton(
-            onPressed: onSaveSerial,
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-            ),
-            child: const Icon(Icons.save_sharp, size: 18),
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
 
@@ -291,6 +339,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
     required ValueChanged<int> onChanged,
   }) {
     return DropdownButtonFormField<int>(
+      isExpanded: true,
       initialValue: value,
       decoration: InputDecoration(
         labelText: label,
@@ -298,7 +347,13 @@ class ConnectionSettingsPanel extends StatelessWidget {
         isDense: true,
       ),
       items: options.map((option) {
-        return DropdownMenuItem(value: option, child: Text(option.toString()));
+        return DropdownMenuItem(
+          value: option,
+          child: Text(
+            option.toString(),
+            overflow: TextOverflow.ellipsis,
+          ),
+        );
       }).toList(),
       onChanged: (selectedValue) {
         if (selectedValue != null) {
@@ -315,6 +370,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
     required ValueChanged<String> onChanged,
   }) {
     return DropdownButtonFormField<String>(
+      isExpanded: true,
       initialValue: value,
       decoration: InputDecoration(
         labelText: label,
@@ -322,7 +378,13 @@ class ConnectionSettingsPanel extends StatelessWidget {
         isDense: true,
       ),
       items: options.entries.map((entry) {
-        return DropdownMenuItem(value: entry.key, child: Text(entry.value));
+        return DropdownMenuItem(
+          value: entry.key,
+          child: Text(
+            entry.value,
+            overflow: TextOverflow.ellipsis,
+          ),
+        );
       }).toList(),
       onChanged: (selectedValue) {
         if (selectedValue != null) {

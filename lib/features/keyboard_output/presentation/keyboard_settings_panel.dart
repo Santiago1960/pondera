@@ -31,49 +31,62 @@ class KeyboardSettingsPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: prefixController,
-                  decoration: const InputDecoration(
-                    labelText: 'Prefijo',
-                    border: OutlineInputBorder(),
-                    isDense: true,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final availableWidth = constraints.maxWidth;
+              final fieldWidth = availableWidth >= 720
+                  ? (availableWidth - 72) / 2
+                  : availableWidth;
+
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.end,
+                children: [
+                  SizedBox(
+                    width: fieldWidth.clamp(220.0, availableWidth),
+                    child: TextField(
+                      controller: prefixController,
+                      decoration: const InputDecoration(
+                        labelText: 'Prefijo',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'IBMPlexMono',
+                      ),
+                    ),
                   ),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontFamily: 'IBMPlexMono',
+                  SizedBox(
+                    width: fieldWidth.clamp(220.0, availableWidth),
+                    child: TextField(
+                      controller: suffixController,
+                      decoration: const InputDecoration(
+                        labelText: 'Sufijo',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'IBMPlexMono',
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: TextField(
-                  controller: suffixController,
-                  decoration: const InputDecoration(
-                    labelText: 'Sufijo',
-                    border: OutlineInputBorder(),
-                    isDense: true,
+                  ElevatedButton(
+                    onPressed: onSave,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 16,
+                        horizontal: 12,
+                      ),
+                      minimumSize: const Size(52, 52),
+                    ),
+                    child: const Icon(Icons.save, size: 18),
                   ),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontFamily: 'IBMPlexMono',
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              ElevatedButton(
-                onPressed: onSave,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 16,
-                    horizontal: 12,
-                  ),
-                ),
-                child: const Icon(Icons.save, size: 18),
-              ),
-            ],
+                ],
+              );
+            },
           ),
         ],
       ),
