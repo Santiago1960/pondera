@@ -1,0 +1,15 @@
+metadata enviada a n8n desde la app Pondera
+
+installation_id: INSTALL-F8802E90-363A-4373-8988-CBE80C6C4993
+app_version: 0.1.0
+platform: windows
+license_mode: demo
+license_status: missing
+license_id: [null]
+customer_id: [null]
+customer_name: [null]
+site_id: [null]
+site_name: [null]
+device_label: [null]
+license_expires_at: 2026-07-08T13:45:33.904762Z
+demo_status: active

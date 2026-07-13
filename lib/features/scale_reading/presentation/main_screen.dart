@@ -662,7 +662,10 @@ class _MainScreenState extends State<MainScreen> {
       'site_id': licensePayload?.siteId,
       'site_name': licensePayload?.siteName,
       'device_label': licensePayload?.deviceLabel,
-      'demo_expires_at': demoLicense?.expirationDate.toUtc().toIso8601String(),
+      'license_expires_at':
+          (licensePayload?.expiresAt ?? demoLicense?.expirationDate)
+              ?.toUtc()
+              .toIso8601String(),
       'demo_status': demoLicense?.status.name,
     };
   }
