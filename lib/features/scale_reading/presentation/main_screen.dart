@@ -320,10 +320,19 @@ class _MainScreenState extends State<MainScreen> {
         if (_isDemoExpired) {
           _savedRegex = '';
           _expectedValue = '';
-          _cleanWeightDisplay = 'Licencia vencida';
+          _cleanWeightDisplay =
+              updatedLicense.status == LicenseVerificationStatus.expired
+              ? 'Licencia vencida'
+              : 'Licencia inválida';
           _uiStatusMessage = updatedLicense.message;
           _networkDiagnostics =
               'La licencia está bloqueada. No se abrirá conexión.';
+        } else if (_cleanWeightDisplay == 'Licencia vencida' ||
+            _cleanWeightDisplay == 'Licencia inválida') {
+          _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
+          if (!_isConnected) {
+            _uiStatusMessage = 'Licencia válida. Lista para continuar.';
+          }
         }
       });
       return;
@@ -442,18 +451,6 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
       if (!result.isUsable) {
-        if (_shouldClearRecipeForOfflineLicense(result)) {
-          await _clearRecipeStorage();
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            _savedRegex = '';
-            _expectedValue = '';
-            _cleanWeightDisplay = 'Licencia vencida';
-            _uiStatusMessage = result.message;
-          });
-        }
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(result.message)));

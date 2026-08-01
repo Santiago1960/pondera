@@ -83,6 +83,34 @@ void main() {
     expect(result.status, LicenseVerificationStatus.invalidSignature);
   });
 
+  test('una importación rechazada conserva la licencia activa', () async {
+    final preferences = await SharedPreferences.getInstance();
+    final controller = _buildController(preferences, 'INSTALL-TEST');
+    final activeLicense = await _signedLicense(
+      installationId: 'INSTALL-TEST',
+      expiresAt: DateTime.utc(2026, 9, 30),
+    );
+    final expiredLicense = await _signedLicense(
+      installationId: 'INSTALL-TEST',
+      expiresAt: DateTime.utc(2026, 7, 1),
+    );
+
+    await controller.import(
+      activeLicense.encode(),
+      now: DateTime.utc(2026, 8, 1),
+    );
+    final rejected = await controller.import(
+      expiredLicense.encode(),
+      now: DateTime.utc(2026, 8, 1),
+    );
+    final installed = await controller.validateStored(
+      now: DateTime.utc(2026, 8, 1),
+    );
+
+    expect(rejected.status, LicenseVerificationStatus.expired);
+    expect(installed.status, LicenseVerificationStatus.active);
+  });
+
   test('distingue período de gracia y vencimiento definitivo', () async {
     final preferences = await SharedPreferences.getInstance();
     final controller = _buildController(preferences, 'INSTALL-TEST');
