@@ -660,7 +660,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _showOperatorAlert({required String message}) async {
-    if (Platform.isMacOS) {
+    if (Platform.isMacOS || Platform.isWindows) {
       try {
         await _operatorAlertChannel.invokeMethod<void>('show', {
           'title': 'Peso no registrado',

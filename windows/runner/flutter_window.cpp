@@ -1,5 +1,8 @@
 #include "flutter_window.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -9,6 +12,205 @@
 #include <flutter/standard_method_codec.h>
 
 namespace {
+
+constexpr wchar_t kOperatorAlertWindowClass[] =
+    L"PONDERA_OPERATOR_ALERT_WINDOW";
+constexpr UINT_PTR kOperatorAlertTimerId = 1;
+constexpr int kOperatorAlertWidth = 430;
+constexpr int kOperatorAlertHeight = 112;
+constexpr int kOperatorAlertMargin = 24;
+
+struct OperatorAlertState {
+  std::wstring title;
+  std::wstring message;
+  UINT duration_ms = 4000;
+  HFONT title_font = nullptr;
+  HFONT message_font = nullptr;
+
+  ~OperatorAlertState() {
+    if (title_font) {
+      DeleteObject(title_font);
+    }
+    if (message_font) {
+      DeleteObject(message_font);
+    }
+  }
+};
+
+HWND g_operator_alert_window = nullptr;
+std::unique_ptr<OperatorAlertState> g_operator_alert_state;
+
+int ScaleForDpi(int value, UINT dpi) {
+  return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+}
+
+LRESULT CALLBACK OperatorAlertWindowProc(HWND window, UINT message,
+                                         WPARAM wparam,
+                                         LPARAM lparam) noexcept {
+  auto* state = reinterpret_cast<OperatorAlertState*>(
+      GetWindowLongPtr(window, GWLP_USERDATA));
+
+  if (message == WM_NCCREATE) {
+    const auto* create = reinterpret_cast<CREATESTRUCT*>(lparam);
+    state = static_cast<OperatorAlertState*>(create->lpCreateParams);
+    SetWindowLongPtr(window, GWLP_USERDATA,
+                     reinterpret_cast<LONG_PTR>(state));
+  }
+
+  switch (message) {
+    case WM_CREATE: {
+      if (!state) {
+        return -1;
+      }
+
+      const UINT dpi = GetDpiForWindow(window);
+      state->title_font = CreateFontW(
+          -ScaleForDpi(16, dpi), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+          CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+      state->message_font = CreateFontW(
+          -ScaleForDpi(13, dpi), 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE,
+          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+          CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+      SetTimer(window, kOperatorAlertTimerId, state->duration_ms, nullptr);
+      return 0;
+    }
+
+    case WM_ERASEBKGND:
+      return 1;
+
+    case WM_PAINT: {
+      PAINTSTRUCT paint{};
+      HDC device_context = BeginPaint(window, &paint);
+      RECT bounds{};
+      GetClientRect(window, &bounds);
+
+      HBRUSH background = CreateSolidBrush(RGB(185, 28, 28));
+      FillRect(device_context, &bounds, background);
+      DeleteObject(background);
+
+      if (state) {
+        const UINT dpi = GetDpiForWindow(window);
+        const int horizontal_padding = ScaleForDpi(18, dpi);
+        const int top_padding = ScaleForDpi(14, dpi);
+        const int title_height = ScaleForDpi(24, dpi);
+        const int spacing = ScaleForDpi(5, dpi);
+
+        SetBkMode(device_context, TRANSPARENT);
+        SetTextColor(device_context, RGB(255, 255, 255));
+
+        RECT title_bounds{horizontal_padding, top_padding,
+                          bounds.right - horizontal_padding,
+                          top_padding + title_height};
+        SelectObject(device_context, state->title_font);
+        DrawTextW(device_context, state->title.c_str(), -1, &title_bounds,
+                  DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+        RECT message_bounds{horizontal_padding,
+                            top_padding + title_height + spacing,
+                            bounds.right - horizontal_padding,
+                            bounds.bottom - top_padding};
+        SelectObject(device_context, state->message_font);
+        DrawTextW(device_context, state->message.c_str(), -1, &message_bounds,
+                  DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+      }
+
+      EndPaint(window, &paint);
+      return 0;
+    }
+
+    case WM_TIMER:
+      if (wparam == kOperatorAlertTimerId) {
+        KillTimer(window, kOperatorAlertTimerId);
+        DestroyWindow(window);
+        return 0;
+      }
+      break;
+
+    case WM_NCDESTROY:
+      SetWindowLongPtr(window, GWLP_USERDATA, 0);
+      if (g_operator_alert_window == window) {
+        g_operator_alert_window = nullptr;
+        g_operator_alert_state.reset();
+      }
+      return 0;
+  }
+
+  return DefWindowProc(window, message, wparam, lparam);
+}
+
+bool EnsureOperatorAlertWindowClass() {
+  WNDCLASSW window_class{};
+  window_class.style = CS_DROPSHADOW;
+  window_class.lpfnWndProc = OperatorAlertWindowProc;
+  window_class.hInstance = GetModuleHandle(nullptr);
+  window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  window_class.lpszClassName = kOperatorAlertWindowClass;
+
+  if (RegisterClassW(&window_class)) {
+    return true;
+  }
+  return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
+void DismissOperatorAlert() {
+  if (g_operator_alert_window) {
+    DestroyWindow(g_operator_alert_window);
+  }
+}
+
+bool ShowOperatorAlert(HWND owner_window, const std::wstring& title,
+                       const std::wstring& message, UINT duration_ms) {
+  DismissOperatorAlert();
+  if (!EnsureOperatorAlertWindowClass()) {
+    return false;
+  }
+
+  POINT cursor_position{};
+  GetCursorPos(&cursor_position);
+  const HMONITOR monitor =
+      MonitorFromPoint(cursor_position, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO monitor_info{};
+  monitor_info.cbSize = sizeof(monitor_info);
+  if (!GetMonitorInfo(monitor, &monitor_info)) {
+    return false;
+  }
+
+  const UINT dpi = owner_window ? GetDpiForWindow(owner_window)
+                                : USER_DEFAULT_SCREEN_DPI;
+  const int width = ScaleForDpi(kOperatorAlertWidth, dpi);
+  const int height = ScaleForDpi(kOperatorAlertHeight, dpi);
+  const int margin = ScaleForDpi(kOperatorAlertMargin, dpi);
+  const int left = monitor_info.rcWork.right - width - margin;
+  const int top = monitor_info.rcWork.top + margin;
+
+  g_operator_alert_state = std::make_unique<OperatorAlertState>();
+  g_operator_alert_state->title = title;
+  g_operator_alert_state->message = message;
+  g_operator_alert_state->duration_ms = duration_ms;
+
+  g_operator_alert_window = CreateWindowExW(
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+      kOperatorAlertWindowClass, title.c_str(), WS_POPUP, left, top, width,
+      height, nullptr, nullptr, GetModuleHandle(nullptr),
+      g_operator_alert_state.get());
+  if (!g_operator_alert_window) {
+    g_operator_alert_state.reset();
+    return false;
+  }
+
+  HRGN rounded_region = CreateRoundRectRgn(
+      0, 0, width + 1, height + 1, ScaleForDpi(12, dpi),
+      ScaleForDpi(12, dpi));
+  if (!SetWindowRgn(g_operator_alert_window, rounded_region, TRUE)) {
+    DeleteObject(rounded_region);
+  }
+
+  SetWindowPos(g_operator_alert_window, HWND_TOPMOST, left, top, width, height,
+               SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  ShowWindow(g_operator_alert_window, SW_SHOWNOACTIVATE);
+  return true;
+}
 
 std::wstring Utf8ToWide(const std::string& value) {
   if (value.empty()) {
@@ -143,6 +345,21 @@ const std::string* GetStringArgument(const flutter::EncodableMap& arguments,
   return std::get_if<std::string>(&it->second);
 }
 
+int64_t GetIntegerArgument(const flutter::EncodableMap& arguments,
+                           const char* key, int64_t fallback) {
+  auto it = arguments.find(flutter::EncodableValue(key));
+  if (it == arguments.end()) {
+    return fallback;
+  }
+  if (const auto* value = std::get_if<int32_t>(&it->second)) {
+    return *value;
+  }
+  if (const auto* value = std::get_if<int64_t>(&it->second)) {
+    return *value;
+  }
+  return fallback;
+}
+
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -210,6 +427,50 @@ bool FlutterWindow::OnCreate() {
         result->Success();
       });
 
+  operator_alert_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "pondera/operator_alert",
+          &flutter::StandardMethodCodec::GetInstance());
+  operator_alert_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "show") {
+          result->NotImplemented();
+          return;
+        }
+
+        const auto* arguments =
+            std::get_if<flutter::EncodableMap>(call.arguments());
+        if (!arguments) {
+          result->Error("invalid_arguments", "Expected a map of arguments.");
+          return;
+        }
+
+        const std::string* title = GetStringArgument(*arguments, "title");
+        const std::string* message = GetStringArgument(*arguments, "message");
+        if (!title || !message) {
+          result->Error("invalid_arguments",
+                        "Expected string arguments: title and message.");
+          return;
+        }
+
+        const int64_t requested_duration =
+            GetIntegerArgument(*arguments, "durationMs", 4000);
+        const UINT duration = static_cast<UINT>(std::clamp<int64_t>(
+            requested_duration, 1500, 10000));
+        if (!ShowOperatorAlert(GetHandle(), Utf8ToWide(*title),
+                               Utf8ToWide(*message), duration)) {
+          result->Error("show_alert_failed",
+                        "Windows could not show the operator alert.",
+                        flutter::EncodableValue(
+                            static_cast<int32_t>(GetLastError())));
+          return;
+        }
+
+        result->Success();
+      });
+
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -225,6 +486,12 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (operator_alert_channel_) {
+    operator_alert_channel_->SetMethodCallHandler(nullptr);
+  }
+  operator_alert_channel_ = nullptr;
+  DismissOperatorAlert();
+
   if (windows_keyboard_channel_) {
     windows_keyboard_channel_->SetMethodCallHandler(nullptr);
   }
