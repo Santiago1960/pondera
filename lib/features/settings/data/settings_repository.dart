@@ -45,6 +45,21 @@ class SettingsRepository {
       keyboardSuffix: _preferences.getString(PreferenceKeys.suffix) ?? '',
       inputUnit: _preferences.getString(PreferenceKeys.inputUnit) ?? 'kg',
       outputUnit: _preferences.getString(PreferenceKeys.outputUnit) ?? 'kg',
+      captureMode:
+          _preferences.getString(PreferenceKeys.captureMode) ??
+          'indicatorPrint',
+      captureStableMilliseconds:
+          _preferences.getInt(PreferenceKeys.captureStableMilliseconds) ?? 1000,
+      captureRangeEnabled:
+          _preferences.getBool(PreferenceKeys.captureRangeEnabled) ?? false,
+      captureMinimumWeight: _preferences.getDouble(
+        PreferenceKeys.captureMinimumWeight,
+      ),
+      captureMaximumWeight: _preferences.getDouble(
+        PreferenceKeys.captureMaximumWeight,
+      ),
+      captureRangeUnit:
+          _preferences.getString(PreferenceKeys.captureRangeUnit) ?? 'kg',
     );
   }
 
@@ -87,6 +102,42 @@ class SettingsRepository {
   }) async {
     await _preferences.setString(PreferenceKeys.inputUnit, inputUnit);
     await _preferences.setString(PreferenceKeys.outputUnit, outputUnit);
+  }
+
+  Future<void> saveWeightCapture({
+    required String mode,
+    required int stableMilliseconds,
+    required bool rangeEnabled,
+    required double? minimumWeight,
+    required double? maximumWeight,
+    required String rangeUnit,
+  }) async {
+    await _preferences.setString(PreferenceKeys.captureMode, mode);
+    await _preferences.setInt(
+      PreferenceKeys.captureStableMilliseconds,
+      stableMilliseconds,
+    );
+    await _preferences.setBool(
+      PreferenceKeys.captureRangeEnabled,
+      rangeEnabled,
+    );
+    if (minimumWeight == null) {
+      await _preferences.remove(PreferenceKeys.captureMinimumWeight);
+    } else {
+      await _preferences.setDouble(
+        PreferenceKeys.captureMinimumWeight,
+        minimumWeight,
+      );
+    }
+    if (maximumWeight == null) {
+      await _preferences.remove(PreferenceKeys.captureMaximumWeight);
+    } else {
+      await _preferences.setDouble(
+        PreferenceKeys.captureMaximumWeight,
+        maximumWeight,
+      );
+    }
+    await _preferences.setString(PreferenceKeys.captureRangeUnit, rangeUnit);
   }
 
   Future<void> saveThemeMode(String themeMode) async {

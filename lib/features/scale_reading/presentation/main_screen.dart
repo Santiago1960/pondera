@@ -34,14 +34,19 @@ import '../../license/presentation/license_status_panel.dart';
 import '../../recipe/presentation/recipe_actions_panel.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_parser.dart';
+import '../domain/weight_capture_controller.dart';
 import '../domain/weight_converter.dart';
 import '../domain/weight_unit.dart';
 import 'current_weight_panel.dart';
 import 'raw_data_log_panel.dart';
 import 'units_settings_panel.dart';
+import 'weight_capture_settings_panel.dart';
 
 const MethodChannel _windowsKeyboardChannel = MethodChannel(
   'pondera/windows_keyboard',
+);
+const MethodChannel _operatorAlertChannel = MethodChannel(
+  'pondera/operator_alert',
 );
 
 class MainScreen extends StatefulWidget {
@@ -79,8 +84,8 @@ class _MainScreenState extends State<MainScreen> {
   bool _isConnected = false;
   bool _isTyping = false;
   bool _manualDisconnectRequested = false;
+  bool _captureStatusIsError = false;
 
-  DateTime? _lastTypedTime;
   final List<RawDataLogEntry> _receivedDataLog = [];
   int _receptionSequence = 0;
 
@@ -109,6 +114,11 @@ class _MainScreenState extends State<MainScreen> {
 
   WeightUnit _selectedInputUnit = WeightUnit.kilogram;
   WeightUnit _selectedOutputUnit = WeightUnit.kilogram;
+  WeightCaptureMode _selectedCaptureMode = WeightCaptureMode.indicatorPrint;
+  bool _captureRangeEnabled = false;
+  WeightUnit _captureRangeUnit = WeightUnit.kilogram;
+  final WeightCaptureController _weightCaptureController =
+      WeightCaptureController();
   final List<WeightUnit> _inputUnits = [WeightUnit.kilogram, WeightUnit.pound];
   final List<WeightUnit> _outputUnits = WeightUnit.values;
   final List<int> _baudRates = [
@@ -152,6 +162,12 @@ class _MainScreenState extends State<MainScreen> {
   final TextEditingController _serialPortController = TextEditingController();
   final TextEditingController _prefixController = TextEditingController();
   final TextEditingController _suffixController = TextEditingController();
+  final TextEditingController _captureMinimumController =
+      TextEditingController();
+  final TextEditingController _captureMaximumController =
+      TextEditingController();
+  final TextEditingController _captureStableMillisecondsController =
+      TextEditingController(text: '1000');
 
   @override
   void initState() {
@@ -169,6 +185,9 @@ class _MainScreenState extends State<MainScreen> {
     _serialPortController.dispose();
     _prefixController.dispose();
     _suffixController.dispose();
+    _captureMinimumController.dispose();
+    _captureMaximumController.dispose();
+    _captureStableMillisecondsController.dispose();
     super.dispose();
   }
 
@@ -243,6 +262,19 @@ class _MainScreenState extends State<MainScreen> {
           WeightUnit.fromCode(settings.inputUnit) ?? WeightUnit.kilogram;
       _selectedOutputUnit =
           WeightUnit.fromCode(settings.outputUnit) ?? WeightUnit.kilogram;
+      _selectedCaptureMode = _availableCaptureMode(settings.captureMode);
+      _captureRangeEnabled = settings.captureRangeEnabled;
+      _captureRangeUnit =
+          WeightUnit.fromCode(settings.captureRangeUnit) ?? WeightUnit.kilogram;
+      _captureMinimumController.text =
+          settings.captureMinimumWeight?.toString() ?? '';
+      _captureMaximumController.text =
+          settings.captureMaximumWeight?.toString() ?? '';
+      final stableMilliseconds = settings.captureStableMilliseconds;
+      _captureStableMillisecondsController.text =
+          stableMilliseconds >= 100 && stableMilliseconds <= 60000
+          ? stableMilliseconds.toString()
+          : '1000';
 
       if (_isDemoExpired) {
         _cleanWeightDisplay =
@@ -257,6 +289,9 @@ class _MainScreenState extends State<MainScreen> {
         _cleanWeightDisplay = 'Sin receta';
       }
     });
+    _weightCaptureController.updateConfiguration(
+      _currentWeightCaptureConfiguration(),
+    );
     _demoTimer?.cancel();
     _demoTimer = Timer.periodic(
       const Duration(minutes: 1),
@@ -563,6 +598,106 @@ class _MainScreenState extends State<MainScreen> {
       inputUnit: _selectedInputUnit.code,
       outputUnit: _selectedOutputUnit.code,
     );
+  }
+
+  WeightCaptureMode _availableCaptureMode(String storedMode) {
+    return switch (storedMode) {
+      'indicatorPrint' => WeightCaptureMode.indicatorPrint,
+      _ => WeightCaptureMode.indicatorPrint,
+    };
+  }
+
+  double? _parseCaptureWeight(String value) {
+    return double.tryParse(value.trim().replaceAll(',', '.'));
+  }
+
+  WeightCaptureConfiguration _currentWeightCaptureConfiguration() {
+    final stableMilliseconds =
+        int.tryParse(_captureStableMillisecondsController.text) ?? 1000;
+    final range = _captureRangeEnabled
+        ? WeightCaptureRange.restricted(
+            minimum: _parseCaptureWeight(_captureMinimumController.text),
+            maximum: _parseCaptureWeight(_captureMaximumController.text),
+            unit: _captureRangeUnit,
+          )
+        : const WeightCaptureRange.unrestricted();
+
+    return WeightCaptureConfiguration(
+      mode: _selectedCaptureMode,
+      stableDuration: Duration(milliseconds: stableMilliseconds),
+      range: range,
+    );
+  }
+
+  void _saveWeightCaptureConfig() async {
+    final configuration = _currentWeightCaptureConfiguration();
+    final validationError = configuration.validationError;
+    if (validationError != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(validationError)));
+      return;
+    }
+
+    final minimumWeight = _parseCaptureWeight(_captureMinimumController.text);
+    final maximumWeight = _parseCaptureWeight(_captureMaximumController.text);
+    _weightCaptureController.updateConfiguration(configuration);
+    await _settingsRepository.saveWeightCapture(
+      mode: configuration.mode.name,
+      stableMilliseconds: configuration.stableDuration.inMilliseconds,
+      rangeEnabled: _captureRangeEnabled,
+      minimumWeight: minimumWeight,
+      maximumWeight: maximumWeight,
+      rangeUnit: _captureRangeUnit.code,
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Configuración de captura guardada'),
+          duration: Duration(milliseconds: 800),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showOperatorAlert({required String message}) async {
+    if (Platform.isMacOS) {
+      try {
+        await _operatorAlertChannel.invokeMethod<void>('show', {
+          'title': 'Peso no registrado',
+          'message': message,
+          'durationMs': 4000,
+        });
+        return;
+      } catch (error) {
+        debugPrint('No se pudo mostrar la alerta global: $error');
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+    final colorScheme = Theme.of(context).colorScheme;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: colorScheme.error,
+        content: Text(
+          message,
+          style: TextStyle(color: colorScheme.onError),
+        ),
+      ),
+    );
+  }
+
+  void _clearCaptureErrorState() {
+    final hadError = _captureStatusIsError;
+    _captureStatusIsError = false;
+    if (hadError) {
+      _scheduleTelemetryRefresh();
+    }
   }
 
   bool _isCertificateTrustError(Object error) {
@@ -1101,6 +1236,7 @@ end tell
       return;
     }
     _manualDisconnectRequested = false;
+    _captureStatusIsError = false;
 
     if (_selectedConnectionType == ConnectionType.serial) {
       _connectSerial();
@@ -1295,43 +1431,94 @@ end tell
         _networkAccumulator = '';
 
         final parsedWeight = reading.numericValue;
-
-        if (parsedWeight != null && parsedWeight == 0.0) {
-          _cleanWeightDisplay =
-              '$nuevoPesoOriginal ${_selectedInputUnit.label}';
+        if (parsedWeight == null) {
+          _uiStatusMessage = 'La lectura recibida no contiene un peso válido.';
+          _captureStatusIsError = true;
+          unawaited(
+            _showOperatorAlert(message: _uiStatusMessage),
+          );
           _scheduleTelemetryRefresh();
           return;
         }
 
         String pesoFinalAInyectar = nuevoPesoOriginal;
-        if (parsedWeight != null) {
-          final double valorConvertido = WeightConverter.convert(
-            parsedWeight,
-            from: _selectedInputUnit,
-            to: _selectedOutputUnit,
-          );
-          final valorString = valorConvertido.toStringAsFixed(
-            reading.decimalPlaces,
-          );
-          pesoFinalAInyectar = ReadingParser.formatWeight(
-            valorString,
-            expectedValue: _expectedValue,
-          );
-        }
+        final double valorConvertido = WeightConverter.convert(
+          parsedWeight,
+          from: _selectedInputUnit,
+          to: _selectedOutputUnit,
+        );
+        final valorString = valorConvertido.toStringAsFixed(
+          reading.decimalPlaces,
+        );
+        pesoFinalAInyectar = ReadingParser.formatWeight(
+          valorString,
+          expectedValue: _expectedValue,
+        );
 
         final now = DateTime.now();
-        if (_lastTypedTime == null ||
-            now.difference(_lastTypedTime!) >
-                const Duration(milliseconds: 1500)) {
+        final decision = _weightCaptureController.onReading(
+          WeightCaptureReading(
+            value: parsedWeight,
+            unit: _selectedInputUnit,
+            captureText: pesoFinalAInyectar,
+          ),
+          receivedAt: now,
+        );
+
+        if (decision.outcome == WeightCaptureOutcome.zeroRejected) {
+          _cleanWeightDisplay =
+              '$nuevoPesoOriginal ${_selectedInputUnit.label}';
+          _uiStatusMessage = 'Peso cero. No se registró.';
+          _captureStatusIsError = true;
+          unawaited(
+            _showOperatorAlert(message: _uiStatusMessage),
+          );
+          _scheduleTelemetryRefresh();
+          return;
+        }
+
+        if (decision.outcome == WeightCaptureOutcome.outOfRange) {
+          _cleanWeightDisplay =
+              '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
+          _uiStatusMessage = 'Peso fuera del rango permitido. No se registró.';
+          _captureStatusIsError = true;
+          final rangeMessage =
+              'Peso fuera del rango ${_captureMinimumController.text} – '
+              '${_captureMaximumController.text} ${_captureRangeUnit.label}. '
+              'No se registró.';
+          unawaited(
+            _showOperatorAlert(message: rangeMessage),
+          );
+          _scheduleTelemetryRefresh();
+          return;
+        }
+
+        if (decision.outcome == WeightCaptureOutcome.invalidConfiguration) {
+          _uiStatusMessage =
+              decision.configurationError ??
+              'La configuración de captura no es válida.';
+          _captureStatusIsError = true;
+          unawaited(
+            _showOperatorAlert(message: _uiStatusMessage),
+          );
+          _scheduleTelemetryRefresh();
+          return;
+        }
+
+        _clearCaptureErrorState();
+        if (decision.shouldCapture) {
           _isTyping = true;
-          _lastTypedTime = now;
 
           _cleanWeightDisplay =
               '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
+          _uiStatusMessage = 'Peso registrado correctamente.';
           _scheduleTelemetryRefresh();
 
-          await _writeWeightToCursor(pesoFinalAInyectar);
-          _isTyping = false;
+          try {
+            await _writeWeightToCursor(pesoFinalAInyectar);
+          } finally {
+            _isTyping = false;
+          }
         }
       }
     } else {
@@ -1348,6 +1535,7 @@ end tell
     _pollingTimer?.cancel();
     _isConnected = false;
     _isPollingIndicator = false;
+    _captureStatusIsError = false;
     _socket?.destroy();
     _socket = null;
     _serialSubscription?.cancel();
@@ -1389,6 +1577,7 @@ end tell
     _serialPort?.dispose();
     _serialPort = null;
     _isConnected = false;
+    _captureStatusIsError = false;
     if (mounted) {
       setState(() {
         _uiStatusMessage = 'Desconectado';
@@ -1431,6 +1620,7 @@ end tell
                 uiStatusMessage: _uiStatusMessage,
                 isConnected: showingConnected,
                 isInteractionBlocked: _isDemoExpired,
+                isError: _captureStatusIsError,
                 onToggleConnection: showingConnected ? _disconnect : _connect,
               ),
               const SizedBox(height: 10),
@@ -1543,6 +1733,26 @@ end tell
                     _saveUnitsConfig();
                   });
                 },
+              ),
+              const SizedBox(height: 10),
+              WeightCaptureSettingsPanel(
+                selectedMode: _selectedCaptureMode,
+                rangeEnabled: _captureRangeEnabled,
+                rangeUnit: _captureRangeUnit,
+                minimumController: _captureMinimumController,
+                maximumController: _captureMaximumController,
+                stableMillisecondsController:
+                    _captureStableMillisecondsController,
+                onModeChanged: (mode) {
+                  setState(() => _selectedCaptureMode = mode);
+                },
+                onRangeEnabledChanged: (enabled) {
+                  setState(() => _captureRangeEnabled = enabled);
+                },
+                onRangeUnitChanged: (unit) {
+                  setState(() => _captureRangeUnit = unit);
+                },
+                onSave: _saveWeightCaptureConfig,
               ),
               const SizedBox(height: 10),
               KeyboardSettingsPanel(

@@ -16,6 +16,13 @@ class PreferenceKeys {
   static const suffix = 'pondera_suffix';
   static const inputUnit = 'pondera_unit_in';
   static const outputUnit = 'pondera_unit_out';
+  static const captureMode = 'pondera_capture_mode';
+  static const captureStableMilliseconds =
+      'pondera_capture_stable_milliseconds';
+  static const captureRangeEnabled = 'pondera_capture_range_enabled';
+  static const captureMinimumWeight = 'pondera_capture_minimum_weight';
+  static const captureMaximumWeight = 'pondera_capture_maximum_weight';
+  static const captureRangeUnit = 'pondera_capture_range_unit';
   static const themeMode = 'pondera_theme_mode';
   static const demoLocked = 'pondera_demo_locked';
   static const demoStartedAt = 'pondera_demo_started_at';

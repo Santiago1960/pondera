@@ -9,6 +9,7 @@ class ConnectionStatusPanel extends StatelessWidget {
     required this.isConnected,
     required this.isInteractionBlocked,
     required this.onToggleConnection,
+    this.isError = false,
     super.key,
   });
 
@@ -16,13 +17,14 @@ class ConnectionStatusPanel extends StatelessWidget {
   final String uiStatusMessage;
   final bool isConnected;
   final bool isInteractionBlocked;
+  final bool isError;
   final VoidCallback onToggleConnection;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final statusColor = isInteractionBlocked
+    final statusColor = isInteractionBlocked || isError
         ? colorScheme.error
         : isConnected
         ? (isDark ? PonderaColors.successDark : PonderaColors.successLight)

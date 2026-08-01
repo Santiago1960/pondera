@@ -18,6 +18,12 @@ void main() {
     expect(settings.serialBaudRate, 9600);
     expect(settings.inputUnit, 'kg');
     expect(settings.outputUnit, 'kg');
+    expect(settings.captureMode, 'indicatorPrint');
+    expect(settings.captureStableMilliseconds, 1000);
+    expect(settings.captureRangeEnabled, isFalse);
+    expect(settings.captureMinimumWeight, isNull);
+    expect(settings.captureMaximumWeight, isNull);
+    expect(settings.captureRangeUnit, 'kg');
     expect(settings.recipePattern, isEmpty);
     expect(settings.expectedValue, isEmpty);
     expect(SettingsRepository(preferences).loadThemeMode(), 'system');
@@ -31,6 +37,12 @@ void main() {
       PreferenceKeys.expectedValue: ' 0,130 ',
       PreferenceKeys.inputUnit: 'lb',
       PreferenceKeys.outputUnit: 'g',
+      PreferenceKeys.captureMode: 'automaticStable',
+      PreferenceKeys.captureStableMilliseconds: 1500,
+      PreferenceKeys.captureRangeEnabled: true,
+      PreferenceKeys.captureMinimumWeight: 0.150,
+      PreferenceKeys.captureMaximumWeight: 0.250,
+      PreferenceKeys.captureRangeUnit: 'kg',
       PreferenceKeys.themeMode: 'dark',
     });
     final preferences = await SharedPreferences.getInstance();
@@ -42,6 +54,12 @@ void main() {
     expect(settings.expectedValue, '0,130');
     expect(settings.inputUnit, 'lb');
     expect(settings.outputUnit, 'g');
+    expect(settings.captureMode, 'automaticStable');
+    expect(settings.captureStableMilliseconds, 1500);
+    expect(settings.captureRangeEnabled, isTrue);
+    expect(settings.captureMinimumWeight, 0.150);
+    expect(settings.captureMaximumWeight, 0.250);
+    expect(settings.captureRangeUnit, 'kg');
     expect(SettingsRepository(preferences).loadThemeMode(), 'dark');
   });
 
@@ -51,6 +69,14 @@ void main() {
 
     await repository.saveNetwork(ip: '10.0.0.9', port: 5000);
     await repository.saveUnits(inputUnit: 'kg', outputUnit: 'mg');
+    await repository.saveWeightCapture(
+      mode: 'indicatorPrint',
+      stableMilliseconds: 1000,
+      rangeEnabled: true,
+      minimumWeight: 0.150,
+      maximumWeight: 0.250,
+      rangeUnit: 'kg',
+    );
     await repository.saveRecipe(pattern: r'\d+[.,]\d+', expectedValue: '0.130');
     await repository.saveThemeMode('light');
     await repository.saveDemoStartedAt(DateTime(2026, 7, 1, 12));
@@ -59,6 +85,12 @@ void main() {
     expect(preferences.getString(PreferenceKeys.ip), '10.0.0.9');
     expect(preferences.getInt(PreferenceKeys.port), 5000);
     expect(preferences.getString(PreferenceKeys.outputUnit), 'mg');
+    expect(preferences.getString(PreferenceKeys.captureMode), 'indicatorPrint');
+    expect(preferences.getInt(PreferenceKeys.captureStableMilliseconds), 1000);
+    expect(preferences.getBool(PreferenceKeys.captureRangeEnabled), isTrue);
+    expect(preferences.getDouble(PreferenceKeys.captureMinimumWeight), 0.150);
+    expect(preferences.getDouble(PreferenceKeys.captureMaximumWeight), 0.250);
+    expect(preferences.getString(PreferenceKeys.captureRangeUnit), 'kg');
     expect(preferences.getString(PreferenceKeys.recipe), r'\d+[.,]\d+');
     expect(preferences.getString(PreferenceKeys.expectedValue), '0.130');
     expect(preferences.getString(PreferenceKeys.themeMode), 'light');
