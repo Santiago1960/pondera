@@ -19,7 +19,7 @@ constexpr UINT_PTR kOperatorAlertTimerId = 1;
 constexpr int kOperatorAlertWidth = 430;
 constexpr int kOperatorAlertHeight = 112;
 constexpr int kOperatorAlertMargin = 24;
-constexpr int kF12HotKeyIdentifier = 1;
+constexpr UINT kF12PressedMessage = WM_APP + 1;
 
 struct OperatorAlertState {
   std::wstring title;
@@ -40,6 +40,60 @@ struct OperatorAlertState {
 
 HWND g_operator_alert_window = nullptr;
 std::unique_ptr<OperatorAlertState> g_operator_alert_state;
+HHOOK g_f12_keyboard_hook = nullptr;
+HWND g_f12_target_window = nullptr;
+bool g_f12_key_is_down = false;
+
+LRESULT CALLBACK F12KeyboardHookProc(int code, WPARAM wparam,
+                                    LPARAM lparam) noexcept {
+  if (code == HC_ACTION) {
+    const auto* keyboard_event =
+        reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
+    if (keyboard_event->vkCode == VK_F12) {
+      if (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN) {
+        if (!g_f12_key_is_down && g_f12_target_window) {
+          g_f12_key_is_down = true;
+          PostMessage(g_f12_target_window, kF12PressedMessage, 0, 0);
+        }
+        return 1;
+      }
+      if (wparam == WM_KEYUP || wparam == WM_SYSKEYUP) {
+        g_f12_key_is_down = false;
+        return 1;
+      }
+    }
+  }
+
+  return CallNextHookEx(g_f12_keyboard_hook, code, wparam, lparam);
+}
+
+bool SetF12KeyboardHookEnabled(HWND target_window, bool enabled) {
+  if (enabled) {
+    if (g_f12_keyboard_hook) {
+      return g_f12_target_window == target_window;
+    }
+
+    g_f12_target_window = target_window;
+    g_f12_key_is_down = false;
+    g_f12_keyboard_hook = SetWindowsHookExW(
+        WH_KEYBOARD_LL, F12KeyboardHookProc, GetModuleHandle(nullptr), 0);
+    if (!g_f12_keyboard_hook) {
+      g_f12_target_window = nullptr;
+      return false;
+    }
+    return true;
+  }
+
+  g_f12_target_window = nullptr;
+  g_f12_key_is_down = false;
+  if (!g_f12_keyboard_hook) {
+    return true;
+  }
+
+  const HHOOK hook = g_f12_keyboard_hook;
+  g_f12_keyboard_hook = nullptr;
+  return UnhookWindowsHookEx(hook) != FALSE;
+}
 
 int ScaleForDpi(int value, UINT dpi) {
   return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
@@ -403,34 +457,33 @@ bool FlutterWindow::OnCreate() {
           result->Error("invalid_arguments", "Expected a boolean argument.");
           return;
         }
-        if (*enabled == f12_hotkey_registered_) {
+        if (*enabled == f12_keyboard_hook_installed_) {
           result->Success();
           return;
         }
 
         if (*enabled) {
-          if (!RegisterHotKey(GetHandle(), kF12HotKeyIdentifier, MOD_NOREPEAT,
-                              VK_F12)) {
+          if (!SetF12KeyboardHookEnabled(GetHandle(), true)) {
             result->Error(
-                "hotkey_registration_failed",
-                "Windows could not register F12.",
+                "keyboard_hook_installation_failed",
+                "Windows could not install the F12 keyboard hook.",
                 flutter::EncodableValue(
                     static_cast<int32_t>(GetLastError())));
             return;
           }
-          f12_hotkey_registered_ = true;
+          f12_keyboard_hook_installed_ = true;
           result->Success();
           return;
         }
 
-        if (!UnregisterHotKey(GetHandle(), kF12HotKeyIdentifier)) {
+        if (!SetF12KeyboardHookEnabled(GetHandle(), false)) {
           result->Error(
-              "hotkey_unregistration_failed",
-              "Windows could not unregister F12.",
+              "keyboard_hook_removal_failed",
+              "Windows could not remove the F12 keyboard hook.",
               flutter::EncodableValue(static_cast<int32_t>(GetLastError())));
           return;
         }
-        f12_hotkey_registered_ = false;
+        f12_keyboard_hook_installed_ = false;
         result->Success();
       });
 
@@ -537,9 +590,9 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
-  if (f12_hotkey_registered_) {
-    UnregisterHotKey(GetHandle(), kF12HotKeyIdentifier);
-    f12_hotkey_registered_ = false;
+  if (f12_keyboard_hook_installed_) {
+    SetF12KeyboardHookEnabled(GetHandle(), false);
+    f12_keyboard_hook_installed_ = false;
   }
   if (weight_capture_hotkey_channel_) {
     weight_capture_hotkey_channel_->SetMethodCallHandler(nullptr);
@@ -568,8 +621,7 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  if (message == WM_HOTKEY &&
-      static_cast<int>(wparam) == kF12HotKeyIdentifier) {
+  if (message == kF12PressedMessage) {
     if (weight_capture_hotkey_channel_) {
       weight_capture_hotkey_channel_->InvokeMethod("pressed", nullptr);
     }
