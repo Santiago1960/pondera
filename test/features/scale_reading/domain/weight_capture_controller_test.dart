@@ -153,6 +153,71 @@ void main() {
         WeightCaptureOutcome.outOfRange,
       );
     });
+
+    test('detecta una ráfaga continua y bloquea nuevas capturas', () {
+      final controller = WeightCaptureController();
+
+      expect(
+        controller.onReading(reading(0.180), receivedAt: start).outcome,
+        WeightCaptureOutcome.capture,
+      );
+      expect(
+        controller
+            .onReading(
+              reading(0.180),
+              receivedAt: start.add(const Duration(milliseconds: 400)),
+            )
+            .outcome,
+        WeightCaptureOutcome.none,
+      );
+      expect(
+        controller
+            .onReading(
+              reading(0.180),
+              receivedAt: start.add(const Duration(milliseconds: 800)),
+            )
+            .outcome,
+        WeightCaptureOutcome.none,
+      );
+      expect(
+        controller
+            .onReading(
+              reading(0.180),
+              receivedAt: start.add(const Duration(milliseconds: 1200)),
+            )
+            .outcome,
+        WeightCaptureOutcome.continuousInputDetected,
+      );
+      expect(
+        controller
+            .onReading(
+              reading(0.180),
+              receivedAt: start.add(const Duration(milliseconds: 1600)),
+            )
+            .outcome,
+        WeightCaptureOutcome.none,
+      );
+    });
+
+    test('se recupera después de que cesa la trama continua', () {
+      final controller = WeightCaptureController();
+      for (var index = 0; index < 4; index++) {
+        controller.onReading(
+          reading(0.180),
+          receivedAt: start.add(Duration(milliseconds: index * 400)),
+        );
+      }
+
+      expect(
+        controller
+            .onReading(
+              reading(0.200),
+              receivedAt: start.add(const Duration(seconds: 4)),
+            )
+            .outcome,
+        WeightCaptureOutcome.capture,
+      );
+    });
   });
 
   group('modo F12', () {

@@ -7,6 +7,7 @@ void main() {
   Widget buildPanel({
     required List<RawDataLogEntry> entries,
     int receptionSequence = 0,
+    bool continuousMode = false,
   }) {
     return MaterialApp(
       theme: buildPonderaTheme(Brightness.light),
@@ -14,6 +15,7 @@ void main() {
         body: RawDataLogPanel(
           entries: entries,
           receptionSequence: receptionSequence,
+          continuousMode: continuousMode,
         ),
       ),
     );
@@ -60,5 +62,36 @@ void main() {
     expect(find.text('trama dos'), findsOneWidget);
     expect(find.text('12:00:01'), findsOneWidget);
     expect(find.text('12:00:02'), findsOneWidget);
+  });
+
+  testWidgets('oculta el baile de tramas continuas hasta desplegar la muestra', (
+    tester,
+  ) async {
+    final entries = [
+      RawDataLogEntry(
+        rawData: 'peso continuo 0.300',
+        receivedAt: DateTime(2026, 8, 1, 19, 23, 18),
+      ),
+    ];
+
+    await tester.pumpWidget(
+      buildPanel(
+        entries: entries,
+        receptionSequence: 1,
+        continuousMode: true,
+      ),
+    );
+
+    expect(find.text('Recepción continua'), findsOneWidget);
+    expect(
+      find.text('Las tramas se procesan en segundo plano.'),
+      findsOneWidget,
+    );
+    expect(find.text('peso continuo 0.300'), findsNothing);
+
+    await tester.tap(find.text('Recepción continua'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('peso continuo 0.300'), findsOneWidget);
   });
 }

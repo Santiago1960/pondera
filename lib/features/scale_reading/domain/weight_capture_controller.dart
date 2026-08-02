@@ -11,6 +11,7 @@ enum WeightCaptureOutcome {
   waitingForZero,
   noReading,
   invalidConfiguration,
+  continuousInputDetected,
 }
 
 class WeightCaptureRange {
@@ -151,6 +152,8 @@ class WeightCaptureController {
 
   static const zeroTolerance = 0.0000001;
   static const manualDebounce = Duration(milliseconds: 1500);
+  static const continuousInputWindow = Duration(seconds: 2);
+  static const continuousInputThreshold = 4;
 
   WeightCaptureConfiguration _configuration;
   WeightCaptureReading? _latestReading;
@@ -160,6 +163,10 @@ class WeightCaptureController {
   bool _waitingForZero;
   bool _outOfRangeReported = false;
   bool _configurationErrorReported = false;
+  DateTime? _manualBurstStartedAt;
+  DateTime? _lastManualReadingAt;
+  int _manualBurstCount = 0;
+  bool _continuousInputDetected = false;
 
   WeightCaptureConfiguration get configuration => _configuration;
   WeightCaptureReading? get latestReading => _latestReading;
@@ -170,6 +177,7 @@ class WeightCaptureController {
     _latestReading = null;
     _lastManualCaptureAt = null;
     _waitingForZero = configuration.mode != WeightCaptureMode.indicatorPrint;
+    _resetManualInputState();
     _resetAutomaticState();
   }
 
@@ -178,6 +186,16 @@ class WeightCaptureController {
     required DateTime receivedAt,
   }) {
     _latestReading = reading;
+
+    if (_configuration.mode == WeightCaptureMode.indicatorPrint) {
+      final continuousInputDecision = _detectContinuousManualInput(
+        reading,
+        receivedAt,
+      );
+      if (continuousInputDecision != null) {
+        return continuousInputDecision;
+      }
+    }
 
     if (_isZero(reading.value)) {
       _resetAutomaticState();
@@ -336,6 +354,49 @@ class WeightCaptureController {
   }
 
   bool _isZero(double value) => value.abs() < zeroTolerance;
+
+  WeightCaptureDecision? _detectContinuousManualInput(
+    WeightCaptureReading reading,
+    DateTime receivedAt,
+  ) {
+    final previousReadingAt = _lastManualReadingAt;
+    _lastManualReadingAt = receivedAt;
+    if (previousReadingAt != null &&
+        receivedAt.difference(previousReadingAt) > continuousInputWindow) {
+      _resetManualInputState();
+      _lastManualReadingAt = receivedAt;
+    }
+
+    if (_continuousInputDetected) {
+      return WeightCaptureDecision.none;
+    }
+
+    final burstStartedAt = _manualBurstStartedAt;
+    if (burstStartedAt == null ||
+        receivedAt.difference(burstStartedAt) > continuousInputWindow) {
+      _manualBurstStartedAt = receivedAt;
+      _manualBurstCount = 1;
+      return null;
+    }
+
+    _manualBurstCount++;
+    if (_manualBurstCount < continuousInputThreshold) {
+      return null;
+    }
+
+    _continuousInputDetected = true;
+    return WeightCaptureDecision.rejected(
+      WeightCaptureOutcome.continuousInputDetected,
+      reading: reading,
+    );
+  }
+
+  void _resetManualInputState() {
+    _manualBurstStartedAt = null;
+    _lastManualReadingAt = null;
+    _manualBurstCount = 0;
+    _continuousInputDetected = false;
+  }
 
   void _resetAutomaticState() {
     _stableCandidate = null;

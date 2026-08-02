@@ -140,6 +140,10 @@ class SettingsRepository {
     await _preferences.setString(PreferenceKeys.captureRangeUnit, rangeUnit);
   }
 
+  Future<void> saveCaptureMode(String mode) async {
+    await _preferences.setString(PreferenceKeys.captureMode, mode);
+  }
+
   Future<void> saveThemeMode(String themeMode) async {
     await _preferences.setString(PreferenceKeys.themeMode, themeMode);
   }

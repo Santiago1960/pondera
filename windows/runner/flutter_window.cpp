@@ -19,6 +19,7 @@ constexpr UINT_PTR kOperatorAlertTimerId = 1;
 constexpr int kOperatorAlertWidth = 430;
 constexpr int kOperatorAlertHeight = 112;
 constexpr int kOperatorAlertMargin = 24;
+constexpr int kF12HotKeyIdentifier = 1;
 
 struct OperatorAlertState {
   std::wstring title;
@@ -383,6 +384,56 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  weight_capture_hotkey_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "pondera/weight_capture_hotkey",
+          &flutter::StandardMethodCodec::GetInstance());
+  weight_capture_hotkey_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "setEnabled") {
+          result->NotImplemented();
+          return;
+        }
+
+        const bool* enabled = std::get_if<bool>(call.arguments());
+        if (!enabled) {
+          result->Error("invalid_arguments", "Expected a boolean argument.");
+          return;
+        }
+        if (*enabled == f12_hotkey_registered_) {
+          result->Success();
+          return;
+        }
+
+        if (*enabled) {
+          if (!RegisterHotKey(GetHandle(), kF12HotKeyIdentifier, MOD_NOREPEAT,
+                              VK_F12)) {
+            result->Error(
+                "hotkey_registration_failed",
+                "Windows could not register F12.",
+                flutter::EncodableValue(
+                    static_cast<int32_t>(GetLastError())));
+            return;
+          }
+          f12_hotkey_registered_ = true;
+          result->Success();
+          return;
+        }
+
+        if (!UnregisterHotKey(GetHandle(), kF12HotKeyIdentifier)) {
+          result->Error(
+              "hotkey_unregistration_failed",
+              "Windows could not unregister F12.",
+              flutter::EncodableValue(static_cast<int32_t>(GetLastError())));
+          return;
+        }
+        f12_hotkey_registered_ = false;
+        result->Success();
+      });
+
   windows_keyboard_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), "pondera/windows_keyboard",
@@ -486,6 +537,15 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (f12_hotkey_registered_) {
+    UnregisterHotKey(GetHandle(), kF12HotKeyIdentifier);
+    f12_hotkey_registered_ = false;
+  }
+  if (weight_capture_hotkey_channel_) {
+    weight_capture_hotkey_channel_->SetMethodCallHandler(nullptr);
+  }
+  weight_capture_hotkey_channel_ = nullptr;
+
   if (operator_alert_channel_) {
     operator_alert_channel_->SetMethodCallHandler(nullptr);
   }
@@ -508,6 +568,14 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_HOTKEY &&
+      static_cast<int>(wparam) == kF12HotKeyIdentifier) {
+    if (weight_capture_hotkey_channel_) {
+      weight_capture_hotkey_channel_->InvokeMethod("pressed", nullptr);
+    }
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

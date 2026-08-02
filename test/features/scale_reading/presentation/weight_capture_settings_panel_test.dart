@@ -5,7 +5,7 @@ import 'package:pondera/features/scale_reading/domain/weight_unit.dart';
 import 'package:pondera/features/scale_reading/presentation/weight_capture_settings_panel.dart';
 
 void main() {
-  testWidgets('muestra modos futuros y permite configurar el rango de Print', (
+  testWidgets('permite seleccionar F12 y mantiene automático deshabilitado', (
     tester,
   ) async {
     final minimumController = TextEditingController();
@@ -16,6 +16,7 @@ void main() {
     addTearDown(stableController.dispose);
     var rangeEnabled = false;
     var saveCount = 0;
+    var selectedMode = WeightCaptureMode.indicatorPrint;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -24,13 +25,15 @@ void main() {
             builder: (context, setState) {
               return SingleChildScrollView(
                 child: WeightCaptureSettingsPanel(
-                  selectedMode: WeightCaptureMode.indicatorPrint,
+                  selectedMode: selectedMode,
                   rangeEnabled: rangeEnabled,
                   rangeUnit: WeightUnit.kilogram,
                   minimumController: minimumController,
                   maximumController: maximumController,
                   stableMillisecondsController: stableController,
-                  onModeChanged: (_) {},
+                  onModeChanged: (mode) {
+                    setState(() => selectedMode = mode);
+                  },
                   onRangeEnabledChanged: (value) {
                     setState(() => rangeEnabled = value);
                   },
@@ -53,13 +56,15 @@ void main() {
 
     await tester.tap(find.byType(DropdownButtonFormField<WeightCaptureMode>));
     await tester.pumpAndSettle();
-    expect(find.text('Tecla F12 · Próxima etapa'), findsOneWidget);
+    expect(find.text('Tecla F12'), findsOneWidget);
     expect(
       find.text('Automático al estabilizarse · Próxima etapa'),
       findsOneWidget,
     );
-    await tester.tapAt(const Offset(10, 10));
+    await tester.tap(find.text('Tecla F12').last);
     await tester.pumpAndSettle();
+    expect(selectedMode, WeightCaptureMode.keyboardF12);
+    expect(find.textContaining('Presione F12 para registrar'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('capture-range-toggle')));
     await tester.pumpAndSettle();

@@ -1,10 +1,27 @@
 import Cocoa
+import Carbon.HIToolbox
 import FlutterMacOS
+
+private let ponderaHotKeySignature: OSType = 0x504E4452 // PNDR
+private let ponderaF12HotKeyIdentifier: UInt32 = 1
+private let ponderaHotKeyHandler: EventHandlerUPP = { _, _, userData in
+  guard let userData else {
+    return OSStatus(eventNotHandledErr)
+  }
+  let window = Unmanaged<MainFlutterWindow>
+    .fromOpaque(userData)
+    .takeUnretainedValue()
+  window.notifyF12Pressed()
+  return noErr
+}
 
 class MainFlutterWindow: NSWindow {
   private var operatorAlertChannel: FlutterMethodChannel?
   private var operatorAlertPanel: NSPanel?
   private var operatorAlertDismissal: DispatchWorkItem?
+  private var weightCaptureHotkeyChannel: FlutterMethodChannel?
+  private var f12HotKey: EventHotKeyRef?
+  private var hotKeyEventHandler: EventHandlerRef?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -46,8 +63,108 @@ class MainFlutterWindow: NSWindow {
       )
       result(nil)
     }
+    weightCaptureHotkeyChannel = FlutterMethodChannel(
+      name: "pondera/weight_capture_hotkey",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    weightCaptureHotkeyChannel?.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "setEnabled", let enabled = call.arguments as? Bool else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+
+      let status =
+        self?.setF12HotKeyEnabled(enabled) ?? OSStatus(eventNotHandledErr)
+      if status == noErr {
+        result(nil)
+      } else {
+        result(
+          FlutterError(
+            code: "hotkey_registration_failed",
+            message: "macOS could not \(enabled ? "register" : "unregister") F12.",
+            details: Int(status)
+          )
+        )
+      }
+    }
 
     super.awakeFromNib()
+  }
+
+  override func close() {
+    operatorAlertChannel?.setMethodCallHandler(nil)
+    weightCaptureHotkeyChannel?.setMethodCallHandler(nil)
+    dismissOperatorAlert()
+    _ = setF12HotKeyEnabled(false)
+    super.close()
+  }
+
+  deinit {
+    operatorAlertDismissal?.cancel()
+    operatorAlertPanel?.close()
+    if let f12HotKey {
+      UnregisterEventHotKey(f12HotKey)
+    }
+    if let hotKeyEventHandler {
+      RemoveEventHandler(hotKeyEventHandler)
+    }
+  }
+
+  fileprivate func notifyF12Pressed() {
+    weightCaptureHotkeyChannel?.invokeMethod("pressed", arguments: nil)
+  }
+
+  private func setF12HotKeyEnabled(_ enabled: Bool) -> OSStatus {
+    if !enabled {
+      guard let f12HotKey else {
+        return noErr
+      }
+      let status = UnregisterEventHotKey(f12HotKey)
+      if status == noErr {
+        self.f12HotKey = nil
+      }
+      return status
+    }
+
+    if f12HotKey != nil {
+      return noErr
+    }
+
+    if hotKeyEventHandler == nil {
+      var eventType = EventTypeSpec(
+        eventClass: OSType(kEventClassKeyboard),
+        eventKind: UInt32(kEventHotKeyPressed)
+      )
+      let handlerStatus = InstallEventHandler(
+        GetApplicationEventTarget(),
+        ponderaHotKeyHandler,
+        1,
+        &eventType,
+        Unmanaged.passUnretained(self).toOpaque(),
+        &hotKeyEventHandler
+      )
+      if handlerStatus != noErr {
+        return handlerStatus
+      }
+    }
+
+    var registeredHotKey: EventHotKeyRef?
+    let hotKeyIdentifier = EventHotKeyID(
+      signature: ponderaHotKeySignature,
+      id: ponderaF12HotKeyIdentifier
+    )
+    let registrationStatus = RegisterEventHotKey(
+      UInt32(kVK_F12),
+      0,
+      hotKeyIdentifier,
+      GetApplicationEventTarget(),
+      0,
+      &registeredHotKey
+    )
+    if registrationStatus == noErr {
+      f12HotKey = registeredHotKey
+    }
+    return registrationStatus
   }
 
   private func showOperatorAlert(
@@ -55,8 +172,7 @@ class MainFlutterWindow: NSWindow {
     message: String,
     durationMilliseconds: Int
   ) {
-    operatorAlertDismissal?.cancel()
-    operatorAlertPanel?.orderOut(nil)
+    dismissOperatorAlert()
 
     let panelSize = NSSize(width: 430, height: 112)
     let panel = NSPanel(
@@ -123,13 +239,21 @@ class MainFlutterWindow: NSWindow {
       guard let self, self.operatorAlertPanel === panel else {
         return
       }
-      panel?.orderOut(nil)
+      panel?.close()
       self.operatorAlertPanel = nil
+      self.operatorAlertDismissal = nil
     }
     operatorAlertDismissal = dismissal
     DispatchQueue.main.asyncAfter(
       deadline: .now() + .milliseconds(durationMilliseconds),
       execute: dismissal
     )
+  }
+
+  private func dismissOperatorAlert() {
+    operatorAlertDismissal?.cancel()
+    operatorAlertDismissal = nil
+    operatorAlertPanel?.close()
+    operatorAlertPanel = nil
   }
 }

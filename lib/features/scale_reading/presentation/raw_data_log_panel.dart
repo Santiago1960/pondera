@@ -13,11 +13,13 @@ class RawDataLogPanel extends StatefulWidget {
   const RawDataLogPanel({
     required this.entries,
     required this.receptionSequence,
+    this.continuousMode = false,
     super.key,
   });
 
   final List<RawDataLogEntry> entries;
   final int receptionSequence;
+  final bool continuousMode;
 
   @override
   State<RawDataLogPanel> createState() => _RawDataLogPanelState();
@@ -40,7 +42,8 @@ class _RawDataLogPanelState extends State<RawDataLogPanel>
   @override
   void didUpdateWidget(RawDataLogPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.entries.isEmpty ||
+    if (widget.continuousMode ||
+        widget.entries.isEmpty ||
         widget.receptionSequence == oldWidget.receptionSequence) {
       return;
     }
@@ -62,6 +65,51 @@ class _RawDataLogPanelState extends State<RawDataLogPanel>
     final latestEntry = widget.entries.lastOrNull;
     final previousEntries = widget.entries.reversed.skip(1).toList();
     final colorScheme = Theme.of(context).colorScheme;
+    final successColor = Theme.of(context).brightness == Brightness.dark
+        ? PonderaColors.successDark
+        : PonderaColors.successLight;
+
+    if (widget.continuousMode) {
+      return Card(
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            leading: Icon(
+              Icons.sync,
+              color: successColor,
+            ),
+            title: const Text(
+              'Recepción continua',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              'Las tramas se procesan en segundo plano.',
+            ),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: latestEntry == null
+                    ? Text(
+                        'Esperando datos de la balanza...',
+                        style: TextStyle(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      )
+                    : SelectableText(
+                        _visibleRawData(latestEntry.rawData),
+                        style: TextStyle(
+                          color: colorScheme.onSurface,
+                          fontFamily: 'IBMPlexMono',
+                          fontSize: 13,
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Card(
       child: Padding(

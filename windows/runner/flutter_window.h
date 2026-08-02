@@ -36,6 +36,11 @@ class FlutterWindow : public Win32Window {
 
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       operator_alert_channel_;
+
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      weight_capture_hotkey_channel_;
+
+  bool f12_hotkey_registered_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

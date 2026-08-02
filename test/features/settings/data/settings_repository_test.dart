@@ -91,6 +91,8 @@ void main() {
     expect(preferences.getDouble(PreferenceKeys.captureMinimumWeight), 0.150);
     expect(preferences.getDouble(PreferenceKeys.captureMaximumWeight), 0.250);
     expect(preferences.getString(PreferenceKeys.captureRangeUnit), 'kg');
+    await repository.saveCaptureMode('keyboardF12');
+    expect(preferences.getString(PreferenceKeys.captureMode), 'keyboardF12');
     expect(preferences.getString(PreferenceKeys.recipe), r'\d+[.,]\d+');
     expect(preferences.getString(PreferenceKeys.expectedValue), '0.130');
     expect(preferences.getString(PreferenceKeys.themeMode), 'light');

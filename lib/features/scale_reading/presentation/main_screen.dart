@@ -48,6 +48,9 @@ const MethodChannel _windowsKeyboardChannel = MethodChannel(
 const MethodChannel _operatorAlertChannel = MethodChannel(
   'pondera/operator_alert',
 );
+const MethodChannel _weightCaptureHotkeyChannel = MethodChannel(
+  'pondera/weight_capture_hotkey',
+);
 
 class MainScreen extends StatefulWidget {
   const MainScreen({
@@ -172,6 +175,9 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    _weightCaptureHotkeyChannel.setMethodCallHandler(
+      _handleWeightCaptureHotkeyCall,
+    );
     _initialize();
   }
 
@@ -179,6 +185,8 @@ class _MainScreenState extends State<MainScreen> {
   void dispose() {
     _demoTimer?.cancel();
     _telemetryRefreshTimer?.cancel();
+    unawaited(_setF12HotkeyEnabled(false));
+    _weightCaptureHotkeyChannel.setMethodCallHandler(null);
     _disconnect();
     _ipController.dispose();
     _portController.dispose();
@@ -292,6 +300,17 @@ class _MainScreenState extends State<MainScreen> {
     _weightCaptureController.updateConfiguration(
       _currentWeightCaptureConfiguration(),
     );
+    final hotkeyReady = await _setF12HotkeyEnabled(
+      _selectedCaptureMode == WeightCaptureMode.keyboardF12,
+    );
+    if (!hotkeyReady && mounted) {
+      setState(() {
+        _uiStatusMessage =
+            'No se pudo activar F12. Revise si otra aplicación usa esa tecla.';
+        _captureStatusIsError = true;
+      });
+      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+    }
     _demoTimer?.cancel();
     _demoTimer = Timer.periodic(
       const Duration(minutes: 1),
@@ -600,6 +619,7 @@ class _MainScreenState extends State<MainScreen> {
   WeightCaptureMode _availableCaptureMode(String storedMode) {
     return switch (storedMode) {
       'indicatorPrint' => WeightCaptureMode.indicatorPrint,
+      'keyboardF12' => WeightCaptureMode.keyboardF12,
       _ => WeightCaptureMode.indicatorPrint,
     };
   }
@@ -636,6 +656,21 @@ class _MainScreenState extends State<MainScreen> {
       return;
     }
 
+    if (configuration.mode == WeightCaptureMode.keyboardF12 &&
+        !await _setF12HotkeyEnabled(true)) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo activar F12. Revise si otra aplicación usa esa tecla.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final minimumWeight = _parseCaptureWeight(_captureMinimumController.text);
     final maximumWeight = _parseCaptureWeight(_captureMaximumController.text);
     _weightCaptureController.updateConfiguration(configuration);
@@ -647,6 +682,9 @@ class _MainScreenState extends State<MainScreen> {
       maximumWeight: maximumWeight,
       rangeUnit: _captureRangeUnit.code,
     );
+    if (configuration.mode != WeightCaptureMode.keyboardF12) {
+      await _setF12HotkeyEnabled(false);
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -657,6 +695,57 @@ class _MainScreenState extends State<MainScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _changeWeightCaptureMode(WeightCaptureMode mode) async {
+    final activeConfiguration = _weightCaptureController.configuration;
+    if (mode == activeConfiguration.mode) {
+      return;
+    }
+
+    if (mode == WeightCaptureMode.keyboardF12 &&
+        !await _setF12HotkeyEnabled(true)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudo activar F12. Revise si otra aplicación usa esa tecla.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    _weightCaptureController.updateConfiguration(
+      WeightCaptureConfiguration(
+        mode: mode,
+        stableDuration: activeConfiguration.stableDuration,
+        range: activeConfiguration.range,
+      ),
+    );
+    await _settingsRepository.saveCaptureMode(mode.name);
+    if (mode != WeightCaptureMode.keyboardF12) {
+      await _setF12HotkeyEnabled(false);
+    }
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectedCaptureMode = mode;
+      _captureStatusIsError = false;
+      _uiStatusMessage = mode == WeightCaptureMode.keyboardF12
+          ? 'Modo F12 activo. Esperando que la balanza pase por cero.'
+          : 'Modo Print del indicador activo.';
+    });
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Modo de captura actualizado'),
+        duration: Duration(milliseconds: 800),
+      ),
+    );
   }
 
   Future<void> _showOperatorAlert({required String message}) async {
@@ -687,6 +776,134 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleWeightCaptureHotkeyCall(MethodCall call) async {
+    if (call.method == 'pressed') {
+      await _handleF12Pressed();
+    }
+  }
+
+  Future<bool> _setF12HotkeyEnabled(bool enabled) async {
+    if (!Platform.isMacOS && !Platform.isWindows) {
+      return true;
+    }
+    try {
+      await _weightCaptureHotkeyChannel.invokeMethod<void>(
+        'setEnabled',
+        enabled,
+      );
+      return true;
+    } catch (error) {
+      debugPrint(
+        'No se pudo ${enabled ? 'activar' : 'desactivar'} F12: $error',
+      );
+      return false;
+    }
+  }
+
+  Future<void> _handleF12Pressed() async {
+    if (_isTyping || _isDemoExpired) {
+      return;
+    }
+    await _applyWeightCaptureDecision(_weightCaptureController.onF12Pressed());
+  }
+
+  Future<void> _applyWeightCaptureDecision(
+    WeightCaptureDecision decision, {
+    String? displayText,
+    String? zeroDisplayText,
+  }) async {
+    final capturedDisplay =
+        displayText ??
+        (decision.reading == null
+            ? null
+            : '${decision.reading!.captureText} ${_selectedOutputUnit.label}');
+
+    if (decision.outcome == WeightCaptureOutcome.zeroRejected) {
+      if (zeroDisplayText != null || capturedDisplay != null) {
+        _cleanWeightDisplay = zeroDisplayText ?? capturedDisplay!;
+      }
+      _uiStatusMessage = 'Peso cero. No se registró.';
+      _captureStatusIsError = true;
+      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    if (decision.outcome == WeightCaptureOutcome.outOfRange) {
+      if (capturedDisplay != null) {
+        _cleanWeightDisplay = capturedDisplay;
+      }
+      _uiStatusMessage = 'Peso fuera del rango permitido. No se registró.';
+      _captureStatusIsError = true;
+      final rangeMessage =
+          'Peso fuera del rango ${_captureMinimumController.text} – '
+          '${_captureMaximumController.text} ${_captureRangeUnit.label}. '
+          'No se registró.';
+      unawaited(_showOperatorAlert(message: rangeMessage));
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    if (decision.outcome == WeightCaptureOutcome.invalidConfiguration) {
+      _uiStatusMessage =
+          decision.configurationError ??
+          'La configuración de captura no es válida.';
+      _captureStatusIsError = true;
+      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    if (decision.outcome == WeightCaptureOutcome.noReading) {
+      _uiStatusMessage = 'Todavía no hay un peso disponible. No se registró.';
+      _captureStatusIsError = true;
+      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    if (decision.outcome == WeightCaptureOutcome.waitingForZero) {
+      _uiStatusMessage =
+          'Retire el peso y espere que la balanza vuelva a cero.';
+      _captureStatusIsError = true;
+      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    if (decision.outcome == WeightCaptureOutcome.continuousInputDetected) {
+      _uiStatusMessage =
+          'El indicador envía datos continuos, pero Pondera está en modo Print manual.';
+      _captureStatusIsError = true;
+      unawaited(
+        _showOperatorAlert(
+          message:
+              'Configuración incompatible: el indicador está en modo continuo y Pondera en Print manual. Cambie el indicador a envío manual o seleccione Tecla F12.',
+        ),
+      );
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    _clearCaptureErrorState();
+    if (!decision.shouldCapture || decision.reading == null) {
+      return;
+    }
+
+    _isTyping = true;
+    if (capturedDisplay != null) {
+      _cleanWeightDisplay = capturedDisplay;
+    }
+    _uiStatusMessage = 'Peso registrado correctamente.';
+    _scheduleTelemetryRefresh();
+
+    try {
+      await _writeWeightToCursor(decision.reading!.captureText);
+    } finally {
+      _isTyping = false;
+    }
   }
 
   void _clearCaptureErrorState() {
@@ -1461,62 +1678,11 @@ end tell
           ),
           receivedAt: now,
         );
-
-        if (decision.outcome == WeightCaptureOutcome.zeroRejected) {
-          _cleanWeightDisplay =
-              '$nuevoPesoOriginal ${_selectedInputUnit.label}';
-          _uiStatusMessage = 'Peso cero. No se registró.';
-          _captureStatusIsError = true;
-          unawaited(
-            _showOperatorAlert(message: _uiStatusMessage),
-          );
-          _scheduleTelemetryRefresh();
-          return;
-        }
-
-        if (decision.outcome == WeightCaptureOutcome.outOfRange) {
-          _cleanWeightDisplay =
-              '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
-          _uiStatusMessage = 'Peso fuera del rango permitido. No se registró.';
-          _captureStatusIsError = true;
-          final rangeMessage =
-              'Peso fuera del rango ${_captureMinimumController.text} – '
-              '${_captureMaximumController.text} ${_captureRangeUnit.label}. '
-              'No se registró.';
-          unawaited(
-            _showOperatorAlert(message: rangeMessage),
-          );
-          _scheduleTelemetryRefresh();
-          return;
-        }
-
-        if (decision.outcome == WeightCaptureOutcome.invalidConfiguration) {
-          _uiStatusMessage =
-              decision.configurationError ??
-              'La configuración de captura no es válida.';
-          _captureStatusIsError = true;
-          unawaited(
-            _showOperatorAlert(message: _uiStatusMessage),
-          );
-          _scheduleTelemetryRefresh();
-          return;
-        }
-
-        _clearCaptureErrorState();
-        if (decision.shouldCapture) {
-          _isTyping = true;
-
-          _cleanWeightDisplay =
-              '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
-          _uiStatusMessage = 'Peso registrado correctamente.';
-          _scheduleTelemetryRefresh();
-
-          try {
-            await _writeWeightToCursor(pesoFinalAInyectar);
-          } finally {
-            _isTyping = false;
-          }
-        }
+        await _applyWeightCaptureDecision(
+          decision,
+          displayText: '$pesoFinalAInyectar ${_selectedOutputUnit.label}',
+          zeroDisplayText: '$nuevoPesoOriginal ${_selectedInputUnit.label}',
+        );
       }
     } else {
       _networkAccumulator = '';
@@ -1542,6 +1708,9 @@ end tell
     _serialPort?.close();
     _serialPort?.dispose();
     _serialPort = null;
+    _weightCaptureController.updateConfiguration(
+      _weightCaptureController.configuration,
+    );
 
     if (mounted) {
       setState(() {
@@ -1575,6 +1744,9 @@ end tell
     _serialPort = null;
     _isConnected = false;
     _captureStatusIsError = false;
+    _weightCaptureController.updateConfiguration(
+      _weightCaptureController.configuration,
+    );
     if (mounted) {
       setState(() {
         _uiStatusMessage = 'Desconectado';
@@ -1624,6 +1796,8 @@ end tell
               RawDataLogPanel(
                 entries: _receivedDataLog,
                 receptionSequence: _receptionSequence,
+                continuousMode:
+                    _selectedCaptureMode != WeightCaptureMode.indicatorPrint,
               ),
               const SizedBox(height: 10),
               ConnectionDiagnosticsPanel(
@@ -1741,7 +1915,7 @@ end tell
                 stableMillisecondsController:
                     _captureStableMillisecondsController,
                 onModeChanged: (mode) {
-                  setState(() => _selectedCaptureMode = mode);
+                  unawaited(_changeWeightCaptureMode(mode));
                 },
                 onRangeEnabledChanged: (enabled) {
                   setState(() => _captureRangeEnabled = enabled);

@@ -49,7 +49,7 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
               isDense: true,
             ),
             items: WeightCaptureMode.values.map((mode) {
-              final available = mode == WeightCaptureMode.indicatorPrint;
+              final available = mode != WeightCaptureMode.automaticStable;
               return DropdownMenuItem(
                 value: mode,
                 enabled: available,
@@ -68,7 +68,9 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'F12 y captura automática se habilitarán al completar sus integraciones nativas.',
+            selectedMode == WeightCaptureMode.keyboardF12
+                ? 'Modo activo inmediatamente. Presione F12 para registrar el último peso recibido; para registrar otro, la balanza debe volver a cero.'
+                : 'El cambio de modo se aplica inmediatamente. La captura automática se habilitará en la próxima etapa.',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
