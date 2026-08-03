@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../../app/pondera_header.dart';
 import '../../../core/config/app_config.dart';
 import '../../connection/domain/connection_type.dart';
+import '../../connection/domain/scale_polling_state.dart';
 import '../../connection/presentation/connection_diagnostics_panel.dart';
 import '../../connection/presentation/connection_settings_panel.dart';
 import '../../connection/presentation/connection_status_panel.dart';
@@ -100,7 +101,6 @@ class _MainScreenState extends State<MainScreen> {
   int _pollRequestsSent = 0;
   int _bytesReceived = 0;
   int _serialIgnoredBytes = 0;
-  bool _isPollingIndicator = false;
   bool _isSendingToN8n = false;
   bool _isDemoExpired = false;
   String _demoStatusMessage = '';
@@ -122,6 +122,9 @@ class _MainScreenState extends State<MainScreen> {
   WeightUnit _captureRangeUnit = WeightUnit.kilogram;
   final WeightCaptureController _weightCaptureController =
       WeightCaptureController();
+  final ScalePollingState _scalePollingState = ScalePollingState(
+    responseTimeout: AppConfig.scaleResponseTimeout,
+  );
   final List<WeightUnit> _inputUnits = [WeightUnit.kilogram, WeightUnit.pound];
   final List<WeightUnit> _outputUnits = WeightUnit.values;
   final List<int> _baudRates = [
@@ -1484,6 +1487,7 @@ end tell
       _pollRequestsSent = 0;
       _bytesReceived = 0;
       _serialIgnoredBytes = 0;
+      _scalePollingState.reset();
 
       if (mounted) {
         setState(() {
@@ -1493,29 +1497,39 @@ end tell
         });
       }
 
-      _pollingTimer = Timer.periodic(const Duration(milliseconds: 500), (
+      _pollingTimer = Timer.periodic(AppConfig.scalePollingInterval, (
         timer,
       ) async {
-        if (_isConnected && !_isTyping && !_isPollingIndicator) {
-          _isPollingIndicator = true;
-          try {
-            _socket?.write('P\r\n');
-            await _socket?.flush();
-            _pollRequestsSent++;
-            _networkDiagnostics =
-                'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived';
-            _scheduleTelemetryRefresh();
-          } catch (e) {
-            debugPrint('Error enviando polling: $e');
-            _handleDisconnect('Error enviando polling: $e');
-          } finally {
-            _isPollingIndicator = false;
-          }
+        if (!_isConnected) {
+          return;
+        }
+
+        final now = DateTime.now();
+        if (_scalePollingState.hasTimedOut(now)) {
+          _handleDisconnect('El indicador no respondió a la consulta de peso.');
+          return;
+        }
+        if (!_scalePollingState.beginRequest(now)) {
+          return;
+        }
+
+        try {
+          _socket?.write('P\r\n');
+          await _socket?.flush();
+          _pollRequestsSent++;
+          _networkDiagnostics =
+              'Polling enviados: $_pollRequestsSent | Bytes recibidos: $_bytesReceived';
+          _scheduleTelemetryRefresh();
+        } catch (e) {
+          _scalePollingState.reset();
+          debugPrint('Error enviando polling: $e');
+          _handleDisconnect('Error enviando polling: $e');
         }
       });
 
       _socket!.listen(
         (List<int> data) {
+          _scalePollingState.completeResponse();
           final String chunk = utf8.decode(data, allowMalformed: true);
           _appendIncomingChunk(chunk, data.length, sourceLabel: 'TCP');
         },
@@ -1626,7 +1640,7 @@ end tell
   }
 
   void _processAccumulatedData() async {
-    if (_networkAccumulator.isEmpty || _isTyping) {
+    if (_networkAccumulator.isEmpty) {
       return;
     }
 
@@ -1674,6 +1688,14 @@ end tell
           expectedValue: _expectedValue,
         );
 
+        _cleanWeightDisplay =
+            '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
+        _scheduleTelemetryRefresh();
+
+        if (_isTyping) {
+          return;
+        }
+
         final now = DateTime.now();
         final decision = _weightCaptureController.onReading(
           WeightCaptureReading(
@@ -1702,7 +1724,7 @@ end tell
         shouldReconnect && !_manualDisconnectRequested && !_isDemoExpired;
     _pollingTimer?.cancel();
     _isConnected = false;
-    _isPollingIndicator = false;
+    _scalePollingState.reset();
     _captureStatusIsError = false;
     _socket?.destroy();
     _socket = null;
@@ -1748,6 +1770,7 @@ end tell
     _serialPort?.dispose();
     _serialPort = null;
     _isConnected = false;
+    _scalePollingState.reset();
     _captureStatusIsError = false;
     _weightCaptureController.updateConfiguration(
       _weightCaptureController.configuration,

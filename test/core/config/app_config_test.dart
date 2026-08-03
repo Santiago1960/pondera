@@ -9,4 +9,9 @@ void main() {
   test('limita el acumulador para evitar crecimiento indefinido', () {
     expect(AppConfig.maxScaleAccumulatorCharacters, 8192);
   });
+
+  test('consulta el peso sin acumular solicitudes antiguas', () {
+    expect(AppConfig.scalePollingInterval, const Duration(milliseconds: 500));
+    expect(AppConfig.scaleResponseTimeout, const Duration(seconds: 2));
+  });
 }
