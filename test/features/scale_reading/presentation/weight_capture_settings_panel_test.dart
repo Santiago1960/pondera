@@ -5,7 +5,7 @@ import 'package:pondera/features/scale_reading/domain/weight_unit.dart';
 import 'package:pondera/features/scale_reading/presentation/weight_capture_settings_panel.dart';
 
 void main() {
-  testWidgets('permite seleccionar F12 y mantiene automático deshabilitado', (
+  testWidgets('permite seleccionar F12 y captura automática', (
     tester,
   ) async {
     final minimumController = TextEditingController();
@@ -57,14 +57,22 @@ void main() {
     await tester.tap(find.byType(DropdownButtonFormField<WeightCaptureMode>));
     await tester.pumpAndSettle();
     expect(find.text('Tecla F12'), findsOneWidget);
-    expect(
-      find.text('Automático al estabilizarse · Próxima etapa'),
-      findsOneWidget,
-    );
+    expect(find.text('Automático al estabilizarse'), findsOneWidget);
     await tester.tap(find.text('Tecla F12').last);
     await tester.pumpAndSettle();
     expect(selectedMode, WeightCaptureMode.keyboardF12);
     expect(find.textContaining('Presione F12 para registrar'), findsOneWidget);
+
+    await tester.tap(find.byType(DropdownButtonFormField<WeightCaptureMode>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Automático al estabilizarse').last);
+    await tester.pumpAndSettle();
+    expect(selectedMode, WeightCaptureMode.automaticStable);
+    expect(find.textContaining('Registra automáticamente'), findsOneWidget);
+    final stableField = tester.widget<TextField>(
+      find.byKey(const Key('capture-stable-milliseconds-field')),
+    );
+    expect(stableField.enabled, isTrue);
 
     await tester.tap(find.byKey(const Key('capture-range-toggle')));
     await tester.pumpAndSettle();

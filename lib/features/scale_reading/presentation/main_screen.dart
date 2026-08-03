@@ -620,6 +620,7 @@ class _MainScreenState extends State<MainScreen> {
     return switch (storedMode) {
       'indicatorPrint' => WeightCaptureMode.indicatorPrint,
       'keyboardF12' => WeightCaptureMode.keyboardF12,
+      'automaticStable' => WeightCaptureMode.automaticStable,
       _ => WeightCaptureMode.indicatorPrint,
     };
   }
@@ -735,9 +736,13 @@ class _MainScreenState extends State<MainScreen> {
     setState(() {
       _selectedCaptureMode = mode;
       _captureStatusIsError = false;
-      _uiStatusMessage = mode == WeightCaptureMode.keyboardF12
-          ? 'Modo F12 activo. Esperando que la balanza pase por cero.'
-          : 'Modo Print del indicador activo.';
+      _uiStatusMessage = switch (mode) {
+        WeightCaptureMode.indicatorPrint => 'Modo Print del indicador activo.',
+        WeightCaptureMode.keyboardF12 =>
+          'Modo F12 activo. Esperando que la balanza pase por cero.',
+        WeightCaptureMode.automaticStable =>
+          'Modo automático activo. Esperando que la balanza pase por cero.',
+      };
     });
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(

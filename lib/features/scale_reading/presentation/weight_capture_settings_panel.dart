@@ -49,15 +49,9 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
               isDense: true,
             ),
             items: WeightCaptureMode.values.map((mode) {
-              final available = mode != WeightCaptureMode.automaticStable;
               return DropdownMenuItem(
                 value: mode,
-                enabled: available,
-                child: Text(
-                  available
-                      ? _modeLabel(mode)
-                      : '${_modeLabel(mode)} · Próxima etapa',
-                ),
+                child: Text(_modeLabel(mode)),
               );
             }).toList(),
             onChanged: (mode) {
@@ -68,9 +62,14 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            selectedMode == WeightCaptureMode.keyboardF12
-                ? 'Modo activo inmediatamente. Presione F12 para registrar el último peso recibido; para registrar otro, la balanza debe volver a cero.'
-                : 'El cambio de modo se aplica inmediatamente. La captura automática se habilitará en la próxima etapa.',
+            switch (selectedMode) {
+              WeightCaptureMode.indicatorPrint =>
+                'Modo activo inmediatamente. Registra cada trama enviada con el botón Print del indicador.',
+              WeightCaptureMode.keyboardF12 =>
+                'Modo activo inmediatamente. Presione F12 para registrar el último peso recibido; para registrar otro, la balanza debe volver a cero.',
+              WeightCaptureMode.automaticStable =>
+                'Registra automáticamente un peso cuando permanece estable durante el tiempo configurado; para registrar otro, la balanza debe volver a cero.',
+            },
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
@@ -162,11 +161,13 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
           SizedBox(
             width: 240,
             child: TextField(
+              key: const Key('capture-stable-milliseconds-field'),
               controller: stableMillisecondsController,
-              enabled: false,
+              enabled: selectedMode == WeightCaptureMode.automaticStable,
+              keyboardType: TextInputType.number,
               decoration: const InputDecoration(
                 labelText: 'Tiempo estable (ms)',
-                helperText: 'Disponible con captura automática',
+                helperText: 'Entre 100 y 60000 ms',
                 border: OutlineInputBorder(),
                 isDense: true,
               ),
