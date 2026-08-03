@@ -9,6 +9,7 @@ import 'package:pondera/features/license/data/license_verifier.dart';
 import 'package:pondera/features/license/data/offline_license_repository.dart';
 import 'package:pondera/features/license/domain/license_payload.dart';
 import 'package:pondera/features/license/domain/license_key_ids.dart';
+import 'package:pondera/features/license/domain/license_serialization.dart';
 import 'package:pondera/features/license/domain/license_verification_result.dart';
 import 'package:pondera/features/license/domain/signed_license.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -285,7 +286,9 @@ Future<SignedLicense> _signedLicense({
     features: const ['tcp', 'serial', 'n8n', 'keyboard_output'],
   );
   final algorithm = Ed25519();
-  final keyPair = await algorithm.newKeyPairFromSeed(_decodeHex(_seedHex));
+  final keyPair = await algorithm.newKeyPairFromSeed(
+    LicenseSerialization.decodeHex(_seedHex),
+  );
   final payloadBytes = payload.encode();
   final signature = await algorithm.sign(payloadBytes, keyPair: keyPair);
   return SignedLicense.fromBytes(
@@ -305,11 +308,4 @@ class _FixedInstallationStore implements InstallationValueStore {
 
   @override
   Future<void> write(String key, String value) async {}
-}
-
-List<int> _decodeHex(String value) {
-  return List<int>.generate(
-    value.length ~/ 2,
-    (index) => int.parse(value.substring(index * 2, index * 2 + 2), radix: 16),
-  );
 }

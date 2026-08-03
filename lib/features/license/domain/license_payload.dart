@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'license_serialization.dart';
+
 enum LicenseType { trial, subscription, perpetual }
 
 class LicensePayload {
@@ -77,7 +79,10 @@ class LicensePayload {
       throw const FormatException('Versión de licencia no soportada.');
     }
 
-    final licenseTypeValue = _requiredString(decoded, 'license_type');
+    final licenseTypeValue = LicenseSerialization.requiredString(
+      decoded,
+      'license_type',
+    );
     final licenseType = LicenseType.values
         .where((value) => value.name == licenseTypeValue)
         .firstOrNull;
@@ -88,61 +93,40 @@ class LicensePayload {
     }
 
     return LicensePayload(
-      licenseId: _requiredString(decoded, 'license_id'),
-      requestId: _requiredString(decoded, 'request_id'),
-      product: _requiredString(decoded, 'product'),
-      installationId: _requiredString(decoded, 'installation_id'),
-      customerId: _requiredString(decoded, 'customer_id'),
-      customerName: _requiredString(decoded, 'customer_name'),
-      siteId: _requiredString(decoded, 'site_id'),
-      siteName: _requiredString(decoded, 'site_name'),
-      city: _requiredString(decoded, 'city'),
-      deviceLabel: _requiredString(decoded, 'device_label'),
-      assetTag: _optionalString(decoded, 'asset_tag'),
+      licenseId: LicenseSerialization.requiredString(decoded, 'license_id'),
+      requestId: LicenseSerialization.requiredString(decoded, 'request_id'),
+      product: LicenseSerialization.requiredString(decoded, 'product'),
+      installationId: LicenseSerialization.requiredString(
+        decoded,
+        'installation_id',
+      ),
+      customerId: LicenseSerialization.requiredString(decoded, 'customer_id'),
+      customerName: LicenseSerialization.requiredString(
+        decoded,
+        'customer_name',
+      ),
+      siteId: LicenseSerialization.requiredString(decoded, 'site_id'),
+      siteName: LicenseSerialization.requiredString(decoded, 'site_name'),
+      city: LicenseSerialization.requiredString(decoded, 'city'),
+      deviceLabel: LicenseSerialization.requiredString(decoded, 'device_label'),
+      assetTag: LicenseSerialization.optionalString(decoded, 'asset_tag'),
       licenseType: licenseType,
-      issuedAt: _requiredDateTime(decoded, 'issued_at'),
-      notBefore: _requiredDateTime(decoded, 'not_before'),
-      expiresAt: _optionalDateTime(decoded, 'expires_at'),
-      graceUntil: _optionalDateTime(decoded, 'grace_until'),
+      issuedAt: LicenseSerialization.requiredUtcDateTime(decoded, 'issued_at'),
+      notBefore: LicenseSerialization.requiredUtcDateTime(
+        decoded,
+        'not_before',
+      ),
+      expiresAt: LicenseSerialization.optionalUtcDateTime(
+        decoded,
+        'expires_at',
+      ),
+      graceUntil: LicenseSerialization.optionalUtcDateTime(
+        decoded,
+        'grace_until',
+      ),
       features: _requiredStringList(decoded, 'features'),
     );
   }
-}
-
-String _requiredString(Map<String, dynamic> json, String key) {
-  final value = json[key];
-  if (value is! String || value.trim().isEmpty) {
-    throw FormatException('El campo $key es obligatorio.');
-  }
-  return value.trim();
-}
-
-String? _optionalString(Map<String, dynamic> json, String key) {
-  final value = json[key];
-  if (value == null) {
-    return null;
-  }
-  if (value is! String) {
-    throw FormatException('El campo $key debe ser texto.');
-  }
-  final trimmed = value.trim();
-  return trimmed.isEmpty ? null : trimmed;
-}
-
-DateTime _requiredDateTime(Map<String, dynamic> json, String key) {
-  final value = _requiredString(json, key);
-  final parsed = DateTime.tryParse(value);
-  if (parsed == null) {
-    throw FormatException('El campo $key debe ser una fecha ISO 8601.');
-  }
-  return parsed.toUtc();
-}
-
-DateTime? _optionalDateTime(Map<String, dynamic> json, String key) {
-  if (json[key] == null) {
-    return null;
-  }
-  return _requiredDateTime(json, key);
 }
 
 List<String> _requiredStringList(Map<String, dynamic> json, String key) {

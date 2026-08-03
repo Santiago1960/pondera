@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pondera/features/license/domain/license_serialization.dart';
 
 import '../../tool/src/license_signing_key.dart';
 import '../../tool/src/signing_key_generator.dart';
@@ -33,7 +34,9 @@ void main() {
       final derivedPublicKey = await keyPair.extractPublicKey();
       expect(publicJson['key_id'], 'pondera-prod-2026-01');
       expect(
-        _decodeBase64Url(publicJson['public_key'] as String),
+        LicenseSerialization.decodeBase64Url(
+          publicJson['public_key'] as String,
+        ),
         derivedPublicKey.bytes,
       );
     },
@@ -64,9 +67,4 @@ void main() {
     expect(await privateFile.readAsString(), 'existente');
     expect(await publicFile.exists(), isFalse);
   });
-}
-
-List<int> _decodeBase64Url(String value) {
-  final missingPadding = (4 - value.length % 4) % 4;
-  return base64Url.decode(value.padRight(value.length + missingPadding, '='));
 }

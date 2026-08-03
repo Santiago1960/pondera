@@ -4,7 +4,10 @@ import 'package:cryptography/cryptography.dart';
 import 'package:pondera/features/license/domain/license_activation_request.dart';
 import 'package:pondera/features/license/domain/license_key_ids.dart';
 import 'package:pondera/features/license/domain/license_payload.dart';
+import 'package:pondera/features/license/domain/license_serialization.dart';
 import 'package:pondera/features/license/domain/signed_license.dart';
+
+import 'src/license_output_path.dart';
 
 // Clave privada pública del vector de prueba RFC 8032.
 // Es insegura y se acepta únicamente en builds debug de Pondera.
@@ -49,7 +52,7 @@ Future<void> main(List<String> arguments) async {
 
   final algorithm = Ed25519();
   final keyPair = await algorithm.newKeyPairFromSeed(
-    _decodeHex(_developmentSeedHex),
+    LicenseSerialization.decodeHex(_developmentSeedHex),
   );
   final payloadBytes = payload.encode();
   final signature = await algorithm.sign(payloadBytes, keyPair: keyPair);
@@ -61,22 +64,7 @@ Future<void> main(List<String> arguments) async {
 
   final outputPath = arguments.length == 2
       ? arguments[1]
-      : _defaultOutputPath(requestFile.path);
+      : defaultLicenseOutputPath(requestFile.path);
   await File(outputPath).writeAsString(signedLicense.encode(), flush: true);
   stdout.writeln('Licencia de desarrollo creada: $outputPath');
-}
-
-String _defaultOutputPath(String requestPath) {
-  const extension = '.pondera-request';
-  if (requestPath.endsWith(extension)) {
-    return '${requestPath.substring(0, requestPath.length - extension.length)}.pondera-license';
-  }
-  return '$requestPath.pondera-license';
-}
-
-List<int> _decodeHex(String value) {
-  return List<int>.generate(
-    value.length ~/ 2,
-    (index) => int.parse(value.substring(index * 2, index * 2 + 2), radix: 16),
-  );
 }

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:pondera/features/license/domain/license_serialization.dart';
+
 class LicenseSigningKey {
   const LicenseSigningKey({required this.keyId, required this.seedBytes});
 
@@ -21,9 +23,17 @@ class LicenseSigningKey {
       throw const FormatException('Algoritmo de clave no soportado.');
     }
 
-    final keyId = _requiredString(decoded, 'key_id');
-    final encodedSeed = _requiredString(decoded, 'private_seed');
-    final seedBytes = _decodeBase64Url(encodedSeed);
+    final keyId = LicenseSerialization.requiredString(decoded, 'key_id');
+    final encodedSeed = LicenseSerialization.requiredString(
+      decoded,
+      'private_seed',
+    );
+    final List<int> seedBytes;
+    try {
+      seedBytes = LicenseSerialization.decodeBase64Url(encodedSeed);
+    } on FormatException {
+      throw const FormatException('El campo private_seed no es Base64 válido.');
+    }
     if (seedBytes.length != 32) {
       throw const FormatException(
         'La semilla privada Ed25519 debe contener exactamente 32 bytes.',
@@ -34,22 +44,5 @@ class LicenseSigningKey {
       keyId: keyId,
       seedBytes: List<int>.unmodifiable(seedBytes),
     );
-  }
-}
-
-String _requiredString(Map<String, dynamic> json, String key) {
-  final value = json[key];
-  if (value is! String || value.trim().isEmpty) {
-    throw FormatException('El campo $key es obligatorio.');
-  }
-  return value.trim();
-}
-
-List<int> _decodeBase64Url(String value) {
-  try {
-    final missingPadding = (4 - value.length % 4) % 4;
-    return base64Url.decode(value.padRight(value.length + missingPadding, '='));
-  } on FormatException {
-    throw const FormatException('El campo private_seed no es Base64 válido.');
   }
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:pondera/features/license/domain/license_activation_request.dart';
 
 import 'src/license_signing_key.dart';
+import 'src/license_output_path.dart';
 import 'src/offline_license_issuer.dart';
 import 'src/utc_instant_parser.dart';
 
@@ -41,7 +42,7 @@ Future<void> main(List<String> arguments) async {
       graceDays: options.graceDays,
     );
     final outputPath =
-        options.outputPath ?? _defaultOutputPath(requestFile.path);
+        options.outputPath ?? defaultLicenseOutputPath(requestFile.path);
     await File(outputPath).writeAsString(license.encode(), flush: true);
     stdout.writeln('Licencia creada: $outputPath');
   } on _UsageException catch (error) {
@@ -58,14 +59,6 @@ bool _confirmIssuance() {
   stdout.write('¿Emitir esta licencia? [s/N]: ');
   final answer = stdin.readLineSync()?.trim().toLowerCase();
   return answer == 's' || answer == 'si' || answer == 'sí';
-}
-
-String _defaultOutputPath(String requestPath) {
-  const extension = '.pondera-request';
-  if (requestPath.endsWith(extension)) {
-    return '${requestPath.substring(0, requestPath.length - extension.length)}.pondera-license';
-  }
-  return '$requestPath.pondera-license';
 }
 
 class _IssueOptions {

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pondera/features/license/domain/license_activation_request.dart';
+import 'package:pondera/features/license/domain/license_serialization.dart';
 
 import '../../tool/src/license_signing_key.dart';
 import '../../tool/src/offline_license_issuer.dart';
@@ -17,7 +18,9 @@ void main() {
         'schema_version': 1,
         'algorithm': 'Ed25519',
         'key_id': 'test-key',
-        'private_seed': base64Url.encode(_decodeHex(_seedHex)),
+        'private_seed': base64Url.encode(
+          LicenseSerialization.decodeHex(_seedHex),
+        ),
       }),
     );
     final license = await OfflineLicenseIssuer().issue(
@@ -64,7 +67,7 @@ void main() {
   test('rechaza vencimiento anterior a la emisión', () async {
     final signingKey = LicenseSigningKey(
       keyId: 'test-key',
-      seedBytes: _decodeHex(_seedHex),
+      seedBytes: LicenseSerialization.decodeHex(_seedHex),
     );
 
     expect(
@@ -95,12 +98,5 @@ LicenseActivationRequest _request() {
     city: 'Cuenca',
     deviceLabel: 'PC-Producción-01',
     createdAt: DateTime.utc(2026, 6, 18),
-  );
-}
-
-List<int> _decodeHex(String value) {
-  return List<int>.generate(
-    value.length ~/ 2,
-    (index) => int.parse(value.substring(index * 2, index * 2 + 2), radix: 16),
   );
 }

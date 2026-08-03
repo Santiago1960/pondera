@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'license_serialization.dart';
+
 class LicenseActivationRequest {
   const LicenseActivationRequest({
     required this.requestId,
@@ -58,46 +60,26 @@ class LicenseActivationRequest {
     }
 
     return LicenseActivationRequest(
-      requestId: _requiredString(decoded, 'request_id'),
-      installationId: _requiredString(decoded, 'installation_id'),
-      product: _requiredString(decoded, 'product'),
-      platform: _requiredString(decoded, 'platform'),
-      appVersion: _requiredString(decoded, 'app_version'),
-      customerName: _requiredString(decoded, 'customer_name'),
-      siteName: _requiredString(decoded, 'site_name'),
-      city: _requiredString(decoded, 'city'),
-      deviceLabel: _requiredString(decoded, 'device_label'),
-      assetTag: _optionalString(decoded, 'asset_tag'),
-      createdAt: _requiredDateTime(decoded, 'created_at'),
+      requestId: LicenseSerialization.requiredString(decoded, 'request_id'),
+      installationId: LicenseSerialization.requiredString(
+        decoded,
+        'installation_id',
+      ),
+      product: LicenseSerialization.requiredString(decoded, 'product'),
+      platform: LicenseSerialization.requiredString(decoded, 'platform'),
+      appVersion: LicenseSerialization.requiredString(decoded, 'app_version'),
+      customerName: LicenseSerialization.requiredString(
+        decoded,
+        'customer_name',
+      ),
+      siteName: LicenseSerialization.requiredString(decoded, 'site_name'),
+      city: LicenseSerialization.requiredString(decoded, 'city'),
+      deviceLabel: LicenseSerialization.requiredString(decoded, 'device_label'),
+      assetTag: LicenseSerialization.optionalString(decoded, 'asset_tag'),
+      createdAt: LicenseSerialization.requiredUtcDateTime(
+        decoded,
+        'created_at',
+      ),
     );
   }
-}
-
-String _requiredString(Map<String, dynamic> json, String key) {
-  final value = json[key];
-  if (value is! String || value.trim().isEmpty) {
-    throw FormatException('El campo $key es obligatorio.');
-  }
-  return value.trim();
-}
-
-String? _optionalString(Map<String, dynamic> json, String key) {
-  final value = json[key];
-  if (value == null) {
-    return null;
-  }
-  if (value is! String) {
-    throw FormatException('El campo $key debe ser texto.');
-  }
-  final trimmed = value.trim();
-  return trimmed.isEmpty ? null : trimmed;
-}
-
-DateTime _requiredDateTime(Map<String, dynamic> json, String key) {
-  final value = _requiredString(json, key);
-  final parsed = DateTime.tryParse(value);
-  if (parsed == null) {
-    throw FormatException('El campo $key debe ser una fecha ISO 8601.');
-  }
-  return parsed.toUtc();
 }

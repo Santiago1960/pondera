@@ -69,6 +69,7 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   static const _userManualAssetPath = 'assets/help/pondera_manual_usuario.pdf';
+  static const _briefConfirmationDuration = Duration(milliseconds: 800);
 
   ConnectionType _selectedConnectionType = ConnectionType.ethernet;
   String _deviceIp = '192.168.100.134';
@@ -333,7 +334,10 @@ class _MainScreenState extends State<MainScreen> {
       _isDemoExpired = !updatedLicense.isUsable;
       _demoStatusMessage = updatedLicense.message;
       if (_isDemoExpired) {
-        if (_shouldClearRecipeForOfflineLicense(updatedLicense)) {
+        if (_shouldClearRecipeForLicenseState(
+          offlineLicense: updatedLicense,
+          demoLicense: null,
+        )) {
           await _clearRecipeStorage();
         }
         _disconnect();
@@ -447,7 +451,6 @@ class _MainScreenState extends State<MainScreen> {
         ),
       );
     } catch (error) {
-      debugPrint('No se pudo generar la solicitud de activación: $error');
       if (!mounted) {
         return;
       }
@@ -498,7 +501,6 @@ class _MainScreenState extends State<MainScreen> {
         ),
       );
     } catch (error) {
-      debugPrint('No se pudo importar la licencia: $error');
       if (!mounted) {
         return;
       }
@@ -556,16 +558,7 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     await _settingsRepository.saveNetwork(ip: _deviceIp, port: _devicePort);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuración de red guardada'),
-          duration: Duration(milliseconds: 800),
-        ),
-      );
-    }
+    _showBriefConfirmation('Configuración de red guardada');
   }
 
   void _saveSerialConfig() async {
@@ -585,15 +578,7 @@ class _MainScreenState extends State<MainScreen> {
       flowControl: _serialFlowControl,
     );
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuración RS-232 guardada'),
-          duration: Duration(milliseconds: 800),
-        ),
-      );
-    }
+    _showBriefConfirmation('Configuración RS-232 guardada');
   }
 
   void _saveKeyModifiers() async {
@@ -601,15 +586,7 @@ class _MainScreenState extends State<MainScreen> {
       prefix: _prefixController.text,
       suffix: _suffixController.text,
     );
-    if (mounted) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Comandos de teclado guardados'),
-          duration: Duration(milliseconds: 800),
-        ),
-      );
-    }
+    _showBriefConfirmation('Comandos de teclado guardados');
   }
 
   void _saveUnitsConfig() async {
@@ -690,15 +667,7 @@ class _MainScreenState extends State<MainScreen> {
       await _setF12HotkeyEnabled(false);
     }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Configuración de captura guardada'),
-          duration: Duration(milliseconds: 800),
-        ),
-      );
-    }
+    _showBriefConfirmation('Configuración de captura guardada');
   }
 
   Future<void> _changeWeightCaptureMode(WeightCaptureMode mode) async {
@@ -747,20 +716,28 @@ class _MainScreenState extends State<MainScreen> {
           'Modo automático activo. Esperando que la balanza pase por cero.',
       };
     });
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Modo de captura actualizado'),
-        duration: Duration(milliseconds: 800),
-      ),
+    _showBriefConfirmation('Modo de captura actualizado');
+  }
+
+  void _showBriefConfirmation(String message) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(content: Text(message), duration: _briefConfirmationDuration),
     );
   }
 
-  Future<void> _showOperatorAlert({required String message}) async {
+  Future<void> _showOperatorAlert({
+    String title = 'Peso no registrado',
+    required String message,
+  }) async {
     if (Platform.isMacOS || Platform.isWindows) {
       try {
         await _operatorAlertChannel.invokeMethod<void>('show', {
-          'title': 'Peso no registrado',
+          'title': title,
           'message': message,
           'durationMs': 4000,
         });
@@ -778,10 +755,7 @@ class _MainScreenState extends State<MainScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: colorScheme.error,
-        content: Text(
-          message,
-          style: TextStyle(color: colorScheme.onError),
-        ),
+        content: Text(message, style: TextStyle(color: colorScheme.onError)),
       ),
     );
   }
@@ -876,7 +850,12 @@ class _MainScreenState extends State<MainScreen> {
       _uiStatusMessage =
           'Retire el peso y espere que la balanza vuelva a cero.';
       _captureStatusIsError = true;
-      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      unawaited(
+        _showOperatorAlert(
+          title: 'Esperando paso por cero',
+          message: _uiStatusMessage,
+        ),
+      );
       _scheduleTelemetryRefresh();
       return;
     }
@@ -941,10 +920,7 @@ class _MainScreenState extends State<MainScreen> {
       final manualFile = File(
         '${manualDirectory.path}${Platform.pathSeparator}pondera_manual_usuario.pdf',
       );
-      await manualFile.writeAsBytes(
-        bytes.buffer.asUint8List(),
-        flush: true,
-      );
+      await manualFile.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
 
       if (Platform.isMacOS) {
         await Process.run('open', [manualFile.path]);
@@ -954,7 +930,6 @@ class _MainScreenState extends State<MainScreen> {
         throw UnsupportedError('Plataforma no soportada para abrir el manual.');
       }
     } catch (error) {
-      debugPrint('No se pudo abrir el manual de usuario: $error');
       if (!mounted) {
         return;
       }
@@ -1183,8 +1158,7 @@ class _MainScreenState extends State<MainScreen> {
           _uiStatusMessage = 'n8n respondió HTTP ${response.statusCode}.';
         });
       }
-    } on TimeoutException catch (e) {
-      debugPrint('Timeout esperando respuesta de n8n: $e');
+    } on TimeoutException {
       if (mounted) {
         setState(() {
           _uiStatusMessage = 'n8n tardó más de 45 segundos en responder.';
@@ -1220,21 +1194,14 @@ class _MainScreenState extends State<MainScreen> {
     required LicenseVerificationResult offlineLicense,
     required DemoLicense? demoLicense,
   }) {
-    if (_shouldClearRecipeForOfflineLicense(offlineLicense)) {
-      return true;
-    }
-    return offlineLicense.status == LicenseVerificationStatus.missing &&
-        (demoLicense?.isExpired ?? false);
-  }
-
-  bool _shouldClearRecipeForOfflineLicense(
-    LicenseVerificationResult result,
-  ) {
-    return result.status == LicenseVerificationStatus.expired;
+    return offlineLicense.status == LicenseVerificationStatus.expired ||
+        (offlineLicense.status == LicenseVerificationStatus.missing &&
+            (demoLicense?.isExpired ?? false));
   }
 
   Future<void> _clearRecipeStorage() async {
-    if (_savedRegex.isEmpty && _settingsRepository.load().recipePattern.isEmpty) {
+    if (_savedRegex.isEmpty &&
+        _settingsRepository.load().recipePattern.isEmpty) {
       return;
     }
     await _settingsRepository.clearRecipe();
@@ -1429,15 +1396,13 @@ end tell
 
     if (Platform.isWindows) {
       try {
-        await Clipboard.setData(ClipboardData(text: weightToType));
         await _windowsKeyboardChannel
-            .invokeMethod<void>('sendPasteSequence', <String, String>{
+            .invokeMethod<void>('sendWeightSequence', <String, String>{
               'prefix': currentPrefix,
+              'weight': weightToType,
               'suffix': currentSuffix,
             })
             .timeout(const Duration(seconds: 2));
-
-        debugPrint('Inyección nativa de Windows completada con éxito.');
       } catch (e) {
         debugPrint('Error en inyección nativa de Windows: $e');
       }
@@ -1522,7 +1487,6 @@ end tell
           _scheduleTelemetryRefresh();
         } catch (e) {
           _scalePollingState.reset();
-          debugPrint('Error enviando polling: $e');
           _handleDisconnect('Error enviando polling: $e');
         }
       });
@@ -1534,7 +1498,6 @@ end tell
           _appendIncomingChunk(chunk, data.length, sourceLabel: 'TCP');
         },
         onError: (error) {
-          debugPrint('Error de Socket: $error');
           _handleDisconnect('Error de Socket: $error');
         },
         onDone: () {
@@ -1606,17 +1569,14 @@ end tell
             _serialIgnoredBytes += cleanedChunk.ignoredBytes;
           }
 
-          if (cleanedChunk.text.isEmpty) {
+          if (cleanedChunk.text.isEmpty || cleanedChunk.ignoredBytes > 0) {
             _networkDiagnostics =
                 'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
             _scheduleTelemetryRefresh();
-            return;
           }
 
-          if (cleanedChunk.ignoredBytes > 0) {
-            _networkDiagnostics =
-                'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
-            _scheduleTelemetryRefresh();
+          if (cleanedChunk.text.isEmpty) {
+            return;
           }
 
           _appendIncomingChunk(
@@ -1626,7 +1586,6 @@ end tell
           );
         },
         onError: (error) {
-          debugPrint('Error de puerto serial: $error');
           _handleDisconnect('Error de puerto serial: $error');
         },
         onDone: () {
@@ -1667,14 +1626,11 @@ end tell
         if (parsedWeight == null) {
           _uiStatusMessage = 'La lectura recibida no contiene un peso válido.';
           _captureStatusIsError = true;
-          unawaited(
-            _showOperatorAlert(message: _uiStatusMessage),
-          );
+          unawaited(_showOperatorAlert(message: _uiStatusMessage));
           _scheduleTelemetryRefresh();
           return;
         }
 
-        String pesoFinalAInyectar = nuevoPesoOriginal;
         final double valorConvertido = WeightConverter.convert(
           parsedWeight,
           from: _selectedInputUnit,
@@ -1683,7 +1639,7 @@ end tell
         final valorString = valorConvertido.toStringAsFixed(
           reading.decimalPlaces,
         );
-        pesoFinalAInyectar = ReadingParser.formatWeight(
+        final pesoFinalAInyectar = ReadingParser.formatWeight(
           valorString,
           expectedValue: _expectedValue,
         );
@@ -1722,19 +1678,8 @@ end tell
   ]) {
     final allowReconnect =
         shouldReconnect && !_manualDisconnectRequested && !_isDemoExpired;
-    _pollingTimer?.cancel();
-    _isConnected = false;
-    _scalePollingState.reset();
+    _releaseConnectionResources();
     _captureStatusIsError = false;
-    _socket?.destroy();
-    _socket = null;
-    _serialSubscription?.cancel();
-    _serialSubscription = null;
-    _serialReader?.close();
-    _serialReader = null;
-    _serialPort?.close();
-    _serialPort?.dispose();
-    _serialPort = null;
     _weightCaptureController.updateConfiguration(
       _weightCaptureController.configuration,
     );
@@ -1758,19 +1703,8 @@ end tell
 
   void _disconnect() {
     _manualDisconnectRequested = true;
-    _pollingTimer?.cancel();
     _reconnectTimer?.cancel();
-    _socket?.destroy();
-    _socket = null;
-    _serialSubscription?.cancel();
-    _serialSubscription = null;
-    _serialReader?.close();
-    _serialReader = null;
-    _serialPort?.close();
-    _serialPort?.dispose();
-    _serialPort = null;
-    _isConnected = false;
-    _scalePollingState.reset();
+    _releaseConnectionResources();
     _captureStatusIsError = false;
     _weightCaptureController.updateConfiguration(
       _weightCaptureController.configuration,
@@ -1782,6 +1716,21 @@ end tell
         _networkDiagnostics = 'Sin actividad de enlace.';
       });
     }
+  }
+
+  void _releaseConnectionResources() {
+    _pollingTimer?.cancel();
+    _socket?.destroy();
+    _socket = null;
+    _serialSubscription?.cancel();
+    _serialSubscription = null;
+    _serialReader?.close();
+    _serialReader = null;
+    _serialPort?.close();
+    _serialPort?.dispose();
+    _serialPort = null;
+    _isConnected = false;
+    _scalePollingState.reset();
   }
 
   @override

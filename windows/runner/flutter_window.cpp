@@ -330,25 +330,6 @@ bool SendUnicodeChar(wchar_t character, UINT* sent_events, DWORD* last_error) {
   return SendInputBatch(inputs, sent_events, last_error);
 }
 
-bool SendCtrlV(UINT* sent_events, DWORD* last_error) {
-  std::vector<INPUT> inputs(4);
-  inputs[0].type = INPUT_KEYBOARD;
-  inputs[0].ki.wVk = VK_CONTROL;
-
-  inputs[1].type = INPUT_KEYBOARD;
-  inputs[1].ki.wVk = 'V';
-
-  inputs[2].type = INPUT_KEYBOARD;
-  inputs[2].ki.wVk = 'V';
-  inputs[2].ki.dwFlags = KEYEVENTF_KEYUP;
-
-  inputs[3].type = INPUT_KEYBOARD;
-  inputs[3].ki.wVk = VK_CONTROL;
-  inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-
-  return SendInputBatch(inputs, sent_events, last_error);
-}
-
 bool TryReadSpecialToken(const std::wstring& sequence, size_t index,
                          WORD* virtual_key, size_t* token_length) {
   if (sequence.compare(index, 5, L"{TAB}") == 0) {
@@ -496,7 +477,7 @@ bool FlutterWindow::OnCreate() {
       [](const flutter::MethodCall<flutter::EncodableValue>& call,
          std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
              result) {
-        if (call.method_name() != "sendPasteSequence") {
+        if (call.method_name() != "sendWeightSequence") {
           result->NotImplemented();
           return;
         }
@@ -509,10 +490,11 @@ bool FlutterWindow::OnCreate() {
         }
 
         const std::string* prefix = GetStringArgument(*arguments, "prefix");
+        const std::string* weight = GetStringArgument(*arguments, "weight");
         const std::string* suffix = GetStringArgument(*arguments, "suffix");
-        if (!prefix || !suffix) {
+        if (!prefix || !weight || !suffix) {
           result->Error("invalid_arguments",
-                        "Expected string arguments: prefix and suffix.");
+                        "Expected string arguments: prefix, weight and suffix.");
           return;
         }
 
@@ -520,7 +502,7 @@ bool FlutterWindow::OnCreate() {
         DWORD last_error = ERROR_SUCCESS;
 
         if (!SendSequence(Utf8ToWide(*prefix), &sent_events, &last_error) ||
-            !SendCtrlV(&sent_events, &last_error) ||
+            !SendSequence(Utf8ToWide(*weight), &sent_events, &last_error) ||
             !SendSequence(Utf8ToWide(*suffix), &sent_events, &last_error)) {
           result->Error("send_input_failed", "Windows SendInput failed.",
                         flutter::EncodableValue(

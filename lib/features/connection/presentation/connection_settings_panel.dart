@@ -164,7 +164,10 @@ class ConnectionSettingsPanel extends StatelessWidget {
             ElevatedButton(
               onPressed: onSaveNetwork,
               style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 12,
+                ),
                 minimumSize: const Size(52, 52),
               ),
               child: const Icon(Icons.save_sharp, size: 18),
@@ -185,8 +188,8 @@ class ConnectionSettingsPanel extends StatelessWidget {
         final shortFieldWidth = availableWidth >= 760
             ? (availableWidth - 40) / 5
             : availableWidth >= 520
-                ? (availableWidth - 20) / 3
-                : availableWidth;
+            ? (availableWidth - 20) / 3
+            : availableWidth;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -229,10 +232,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
                     items: availableSerialPorts.map((port) {
                       return DropdownMenuItem(
                         value: port,
-                        child: Text(
-                          port,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                        child: Text(port, overflow: TextOverflow.ellipsis),
                       );
                     }).toList(),
                     onChanged: (value) {
@@ -256,56 +256,62 @@ class ConnectionSettingsPanel extends StatelessWidget {
               children: [
                 SizedBox(
                   width: shortFieldWidth.clamp(140.0, availableWidth),
-                  child: _buildIntDropdown(
+                  child: _buildDropdown<int>(
                     value: baudRates.contains(serialBaudRate)
                         ? serialBaudRate
                         : 9600,
                     label: 'Baud rate',
                     options: baudRates,
+                    optionLabel: (option) => option.toString(),
                     onChanged: onSerialBaudRateChanged,
                   ),
                 ),
                 SizedBox(
                   width: shortFieldWidth.clamp(132.0, availableWidth),
-                  child: _buildIntDropdown(
+                  child: _buildDropdown<int>(
                     value: dataBitsOptions.contains(serialDataBits)
                         ? serialDataBits
                         : 8,
                     label: 'Data bits',
                     options: dataBitsOptions,
+                    optionLabel: (option) => option.toString(),
                     onChanged: onSerialDataBitsChanged,
                   ),
                 ),
                 SizedBox(
                   width: shortFieldWidth.clamp(138.0, availableWidth),
-                  child: _buildStringDropdown(
+                  child: _buildDropdown<String>(
                     value: parityLabels.containsKey(serialParity)
                         ? serialParity
                         : 'none',
                     label: 'Paridad',
-                    options: parityLabels,
+                    options: parityLabels.keys.toList(),
+                    optionLabel: (option) => parityLabels[option] ?? option,
                     onChanged: onSerialParityChanged,
                   ),
                 ),
                 SizedBox(
                   width: shortFieldWidth.clamp(132.0, availableWidth),
-                  child: _buildIntDropdown(
+                  child: _buildDropdown<int>(
                     value: stopBitsOptions.contains(serialStopBits)
                         ? serialStopBits
                         : 1,
                     label: 'Stop bits',
                     options: stopBitsOptions,
+                    optionLabel: (option) => option.toString(),
                     onChanged: onSerialStopBitsChanged,
                   ),
                 ),
                 SizedBox(
                   width: shortFieldWidth.clamp(148.0, availableWidth),
-                  child: _buildStringDropdown(
+                  child: _buildDropdown<String>(
                     value: flowControlLabels.containsKey(serialFlowControl)
                         ? serialFlowControl
                         : 'none',
                     label: 'Flow control',
-                    options: flowControlLabels,
+                    options: flowControlLabels.keys.toList(),
+                    optionLabel: (option) =>
+                        flowControlLabels[option] ?? option,
                     onChanged: onSerialFlowControlChanged,
                   ),
                 ),
@@ -332,13 +338,15 @@ class ConnectionSettingsPanel extends StatelessWidget {
     );
   }
 
-  Widget _buildIntDropdown({
-    required int value,
+  Widget _buildDropdown<T>({
+    required T value,
     required String label,
-    required List<int> options,
-    required ValueChanged<int> onChanged,
+    required List<T> options,
+    required String Function(T option) optionLabel,
+    required ValueChanged<T> onChanged,
   }) {
-    return DropdownButtonFormField<int>(
+    return DropdownButtonFormField<T>(
+      key: ValueKey('serial-$label-dropdown'),
       isExpanded: true,
       initialValue: value,
       decoration: InputDecoration(
@@ -349,41 +357,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
       items: options.map((option) {
         return DropdownMenuItem(
           value: option,
-          child: Text(
-            option.toString(),
-            overflow: TextOverflow.ellipsis,
-          ),
-        );
-      }).toList(),
-      onChanged: (selectedValue) {
-        if (selectedValue != null) {
-          onChanged(selectedValue);
-        }
-      },
-    );
-  }
-
-  Widget _buildStringDropdown({
-    required String value,
-    required String label,
-    required Map<String, String> options,
-    required ValueChanged<String> onChanged,
-  }) {
-    return DropdownButtonFormField<String>(
-      isExpanded: true,
-      initialValue: value,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        isDense: true,
-      ),
-      items: options.entries.map((entry) {
-        return DropdownMenuItem(
-          value: entry.key,
-          child: Text(
-            entry.value,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: Text(optionLabel(option), overflow: TextOverflow.ellipsis),
         );
       }).toList(),
       onChanged: (selectedValue) {

@@ -34,6 +34,7 @@ void main() {
         ReadingParser.formatWeight('1,234.56', expectedValue: '0,130'),
         '1234,56',
       );
+      expect(ReadingParser.formatWeight('0.28', expectedValue: '0,28'), '0,28');
     });
 
     test('conserva valores enteros', () {
