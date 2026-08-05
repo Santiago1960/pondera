@@ -40,4 +40,20 @@ void main() {
     expect(state.waitingForResponse, isFalse);
     expect(state.beginRequest(start.add(const Duration(seconds: 2))), isTrue);
   });
+
+  test('permite consultas periódicas cuando no exige respuesta', () {
+    final state = ScalePollingState(
+      responseTimeout: const Duration(seconds: 2),
+    );
+
+    expect(state.beginRequest(start), isTrue);
+    expect(
+      state.beginRequest(
+        start.add(const Duration(milliseconds: 500)),
+        trackResponse: false,
+      ),
+      isTrue,
+    );
+    expect(state.waitingForResponse, isFalse);
+  });
 }

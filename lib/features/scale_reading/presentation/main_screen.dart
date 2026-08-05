@@ -796,11 +796,7 @@ class _MainScreenState extends State<MainScreen> {
     String? displayText,
     String? zeroDisplayText,
   }) async {
-    final capturedDisplay =
-        displayText ??
-        (decision.reading == null
-            ? null
-            : '${decision.reading!.captureText} ${_selectedOutputUnit.label}');
+    final capturedDisplay = displayText ?? decision.reading?.captureText;
 
     if (decision.outcome == WeightCaptureOutcome.zeroRejected) {
       if (zeroDisplayText != null || capturedDisplay != null) {
@@ -1468,13 +1464,16 @@ end tell
         if (!_isConnected) {
           return;
         }
-
         final now = DateTime.now();
-        if (_scalePollingState.hasTimedOut(now)) {
+        final trackResponse = _selectedCaptureMode.requiresContinuousInput;
+        if (trackResponse && _scalePollingState.hasTimedOut(now)) {
           _handleDisconnect('El indicador no respondió a la consulta de peso.');
           return;
         }
-        if (!_scalePollingState.beginRequest(now)) {
+        if (!_scalePollingState.beginRequest(
+          now,
+          trackResponse: trackResponse,
+        )) {
           return;
         }
 
@@ -1651,8 +1650,7 @@ end tell
           expectedValue: _expectedValue,
         );
 
-        _cleanWeightDisplay =
-            '$pesoFinalAInyectar ${_selectedOutputUnit.label}';
+        _cleanWeightDisplay = pesoFinalAInyectar;
         _scheduleTelemetryRefresh();
 
         if (_isTyping) {
@@ -1670,8 +1668,8 @@ end tell
         );
         await _applyWeightCaptureDecision(
           decision,
-          displayText: '$pesoFinalAInyectar ${_selectedOutputUnit.label}',
-          zeroDisplayText: '$nuevoPesoOriginal ${_selectedInputUnit.label}',
+          displayText: pesoFinalAInyectar,
+          zeroDisplayText: nuevoPesoOriginal,
         );
       }
     } else {

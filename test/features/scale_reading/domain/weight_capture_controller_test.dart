@@ -3,6 +3,15 @@ import 'package:pondera/features/scale_reading/domain/weight_capture_controller.
 import 'package:pondera/features/scale_reading/domain/weight_unit.dart';
 
 void main() {
+  test('solo los modos continuos requieren polling activo', () {
+    expect(
+      WeightCaptureMode.indicatorPrint.requiresContinuousInput,
+      isFalse,
+    );
+    expect(WeightCaptureMode.keyboardF12.requiresContinuousInput, isTrue);
+    expect(WeightCaptureMode.automaticStable.requiresContinuousInput, isTrue);
+  });
+
   final start = DateTime.utc(2026, 1, 1);
 
   WeightCaptureReading reading(

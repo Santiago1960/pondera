@@ -3,6 +3,10 @@ import 'weight_unit.dart';
 
 enum WeightCaptureMode { indicatorPrint, keyboardF12, automaticStable }
 
+extension WeightCaptureModeInput on WeightCaptureMode {
+  bool get requiresContinuousInput => this != WeightCaptureMode.indicatorPrint;
+}
+
 enum WeightCaptureOutcome {
   none,
   capture,

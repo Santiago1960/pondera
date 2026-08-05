@@ -7,7 +7,14 @@ class ScalePollingState {
 
   bool get waitingForResponse => _requestStartedAt != null;
 
-  bool beginRequest(DateTime requestedAt) {
+  bool beginRequest(
+    DateTime requestedAt, {
+    bool trackResponse = true,
+  }) {
+    if (!trackResponse) {
+      _requestStartedAt = null;
+      return true;
+    }
     if (waitingForResponse) {
       return false;
     }
