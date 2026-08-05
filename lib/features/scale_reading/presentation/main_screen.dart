@@ -18,6 +18,7 @@ import '../../connection/domain/scale_polling_state.dart';
 import '../../connection/presentation/connection_diagnostics_panel.dart';
 import '../../connection/presentation/connection_settings_panel.dart';
 import '../../connection/presentation/connection_status_panel.dart';
+import '../../keyboard_output/data/macos_key_script.dart';
 import '../../keyboard_output/presentation/keyboard_settings_panel.dart';
 import '../../license/application/activation_request_service.dart';
 import '../../license/application/demo_license_controller.dart';
@@ -1203,36 +1204,6 @@ class _MainScreenState extends State<MainScreen> {
     await _settingsRepository.clearRecipe();
   }
 
-  String _appleScriptStringLiteral(String value) {
-    return '"${value.replaceAll('\\', '\\\\').replaceAll('"', r'\"')}"';
-  }
-
-  String _parseKeysToAppleScript(String input) {
-    if (input.isEmpty) {
-      return '';
-    }
-    final StringBuffer scriptBuffer = StringBuffer();
-    final RegExp keyRegex = RegExp(r'(\{ENTER\}|\{TAB\}|\{SPACE\}|[^{]+)');
-    final matches = keyRegex.allMatches(input);
-    for (final match in matches) {
-      final token = match.group(0) ?? '';
-      if (token == '{TAB}') {
-        scriptBuffer.writeln('  key code 48');
-        scriptBuffer.writeln('  delay 0.05');
-      } else if (token == '{ENTER}') {
-        scriptBuffer.writeln('  key code 36');
-        scriptBuffer.writeln('  delay 0.05');
-      } else if (token == '{SPACE}') {
-        scriptBuffer.writeln('  key code 49');
-        scriptBuffer.writeln('  delay 0.05');
-      } else {
-        scriptBuffer.writeln('  keystroke ${_appleScriptStringLiteral(token)}');
-        scriptBuffer.writeln('  delay 0.05');
-      }
-    }
-    return scriptBuffer.toString();
-  }
-
   String _getCurrentTimestamp() {
     final now = DateTime.now();
     final year = now.year;
@@ -1369,8 +1340,8 @@ class _MainScreenState extends State<MainScreen> {
     if (Platform.isMacOS) {
       try {
         await Clipboard.setData(ClipboardData(text: weightToType));
-        final String prefixScript = _parseKeysToAppleScript(currentPrefix);
-        final String suffixScript = _parseKeysToAppleScript(currentSuffix);
+        final String prefixScript = buildMacosKeyScript(currentPrefix);
+        final String suffixScript = buildMacosKeyScript(currentSuffix);
         final process = await Process.start('osascript', []);
         final String fullScript =
             '''
