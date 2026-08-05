@@ -1435,16 +1435,16 @@ end tell
         if (!_isConnected) {
           return;
         }
+        if (!_selectedCaptureMode.requiresContinuousInput) {
+          _scalePollingState.reset();
+          return;
+        }
         final now = DateTime.now();
-        final trackResponse = _selectedCaptureMode.requiresContinuousInput;
-        if (trackResponse && _scalePollingState.hasTimedOut(now)) {
+        if (_scalePollingState.hasTimedOut(now)) {
           _handleDisconnect('El indicador no respondió a la consulta de peso.');
           return;
         }
-        if (!_scalePollingState.beginRequest(
-          now,
-          trackResponse: trackResponse,
-        )) {
+        if (!_scalePollingState.beginRequest(now)) {
           return;
         }
 
