@@ -1624,6 +1624,13 @@ end tell
 
         final parsedWeight = reading.numericValue;
         if (parsedWeight == null) {
+          _weightCaptureController.clearReading();
+          _cleanWeightDisplay = '---';
+          if (_selectedCaptureMode != WeightCaptureMode.indicatorPrint) {
+            _clearCaptureErrorState();
+            _scheduleTelemetryRefresh();
+            return;
+          }
           _uiStatusMessage = 'La lectura recibida no contiene un peso válido.';
           _captureStatusIsError = true;
           unawaited(_showOperatorAlert(message: _uiStatusMessage));

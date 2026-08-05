@@ -86,6 +86,20 @@ void main() {
       expect(result.decimalPlaces, 2);
     });
 
+    test('usa el primer grupo capturado como peso', () {
+      final result = ReadingParser.parse(
+        '0001 000000 B 0,16T 0,00N 0,16\r\n',
+        pattern:
+            r'B\s+[0-9]+[\,\.][0-9]+T\s+[0-9]+[\,\.][0-9]+N\s+([0-9]+[\,\.][0-9]+)',
+        expectedValue: '0.16',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.formattedWeight, '0.16');
+      expect(result.numericValue, 0.16);
+      expect(result.decimalPlaces, 2);
+    });
+
     test('retorna null cuando la receta no coincide', () {
       expect(
         ReadingParser.parse(

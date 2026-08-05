@@ -181,6 +181,11 @@ class WeightCaptureController {
     _resetAutomaticState();
   }
 
+  void clearReading() {
+    _latestReading = null;
+    _resetAutomaticState();
+  }
+
   WeightCaptureDecision onReading(
     WeightCaptureReading reading, {
     required DateTime receivedAt,

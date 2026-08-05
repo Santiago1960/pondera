@@ -455,4 +455,22 @@ void main() {
     expect(controller.waitingForZero, isTrue);
     expect(controller.onF12Pressed().outcome, WeightCaptureOutcome.noReading);
   });
+
+  test('descarta una lectura inválida antes de F12', () {
+    final controller = WeightCaptureController(
+      configuration: const WeightCaptureConfiguration(
+        mode: WeightCaptureMode.keyboardF12,
+      ),
+    );
+    controller.onReading(reading(0), receivedAt: start);
+    controller.onReading(
+      reading(0.180),
+      receivedAt: start.add(const Duration(milliseconds: 1)),
+    );
+
+    controller.clearReading();
+
+    expect(controller.latestReading, isNull);
+    expect(controller.onF12Pressed().outcome, WeightCaptureOutcome.noReading);
+  });
 }

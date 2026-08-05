@@ -27,8 +27,11 @@ class ReadingParser {
       return null;
     }
 
+    final capturedWeight = match.groupCount > 0
+        ? match.group(1) ?? match.group(0)
+        : match.group(0);
     final formattedWeight = formatWeight(
-      match.group(0),
+      capturedWeight,
       expectedValue: expectedValue,
     );
     final numericText = formattedWeight
