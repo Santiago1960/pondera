@@ -27,6 +27,11 @@ class PreferenceKeys {
   static const demoLocked = 'pondera_demo_locked';
   static const demoStartedAt = 'pondera_demo_started_at';
   static const demoLastRun = 'pondera_demo_last_run';
+  static const recipeAccessTrialStartedAt =
+      'pondera_recipe_access_trial_started_at';
+  static const recipeAccessTrialExpiresAt =
+      'pondera_recipe_access_trial_expires_at';
+  static const recipeAccessGraceUntil = 'pondera_recipe_access_grace_until';
   static const signedLicense = 'pondera_signed_license';
   static const offlineLicenseLastValidation =
       'pondera_offline_license_last_validation';

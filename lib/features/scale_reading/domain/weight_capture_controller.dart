@@ -155,13 +155,11 @@ class WeightCaptureController {
        _waitingForZero = configuration.mode != WeightCaptureMode.indicatorPrint;
 
   static const zeroTolerance = 0.0000001;
-  static const manualDebounce = Duration(milliseconds: 1500);
-  static const continuousInputWindow = Duration(seconds: 2);
-  static const continuousInputThreshold = 4;
+  static const continuousInputWindow = Duration(seconds: 1);
+  static const continuousInputThreshold = 5;
 
   WeightCaptureConfiguration _configuration;
   WeightCaptureReading? _latestReading;
-  DateTime? _lastManualCaptureAt;
   DateTime? _stableSince;
   String? _stableCandidate;
   bool _waitingForZero;
@@ -179,7 +177,6 @@ class WeightCaptureController {
   void updateConfiguration(WeightCaptureConfiguration configuration) {
     _configuration = configuration;
     _latestReading = null;
-    _lastManualCaptureAt = null;
     _waitingForZero = configuration.mode != WeightCaptureMode.indicatorPrint;
     _resetManualInputState();
     _resetAutomaticState();
@@ -219,10 +216,7 @@ class WeightCaptureController {
     }
 
     return switch (_configuration.mode) {
-      WeightCaptureMode.indicatorPrint => _handleIndicatorPrint(
-        reading,
-        receivedAt,
-      ),
+      WeightCaptureMode.indicatorPrint => _handleIndicatorPrint(reading),
       WeightCaptureMode.keyboardF12 => WeightCaptureDecision.none,
       WeightCaptureMode.automaticStable => _handleAutomatic(
         reading,
@@ -264,20 +258,11 @@ class WeightCaptureController {
     return WeightCaptureDecision.capture(reading);
   }
 
-  WeightCaptureDecision _handleIndicatorPrint(
-    WeightCaptureReading reading,
-    DateTime receivedAt,
-  ) {
+  WeightCaptureDecision _handleIndicatorPrint(WeightCaptureReading reading) {
     final rejection = _validateReading(reading);
     if (rejection != null) {
       return rejection;
     }
-    if (_lastManualCaptureAt != null &&
-        receivedAt.difference(_lastManualCaptureAt!) <= manualDebounce) {
-      return WeightCaptureDecision.none;
-    }
-
-    _lastManualCaptureAt = receivedAt;
     return WeightCaptureDecision.capture(reading);
   }
 

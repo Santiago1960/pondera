@@ -56,4 +56,30 @@ void main() {
     );
     expect(state.waitingForResponse, isFalse);
   });
+
+  test('cuenta silencios consecutivos y se recupera al recibir datos', () {
+    final state = ScalePollingState(
+      responseTimeout: const Duration(seconds: 2),
+    );
+
+    state.beginRequest(start);
+    state.completeTimeout();
+    expect(state.consecutiveTimeouts, 1);
+    expect(state.waitingForResponse, isFalse);
+
+    state.beginRequest(start.add(const Duration(seconds: 2)));
+    state.completeTimeout();
+    expect(state.consecutiveTimeouts, 2);
+
+    state.completeResponse();
+    expect(state.consecutiveTimeouts, 0);
+    expect(state.consecutiveResponses, 1);
+
+    state.completeResponse();
+    expect(state.consecutiveResponses, 2);
+
+    state.beginRequest(start.add(const Duration(seconds: 4)));
+    state.completeTimeout();
+    expect(state.consecutiveResponses, 0);
+  });
 }

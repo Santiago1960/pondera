@@ -74,7 +74,7 @@ void main() {
   });
 
   group('modo Print del indicador', () {
-    test('mantiene la captura actual y su pausa de 1500 ms', () {
+    test('captura cada trama manual válida sin esperar paso por cero', () {
       final controller = WeightCaptureController();
 
       expect(
@@ -85,16 +85,16 @@ void main() {
         controller
             .onReading(
               reading(0.181),
-              receivedAt: start.add(const Duration(milliseconds: 1500)),
+              receivedAt: start.add(const Duration(milliseconds: 1)),
             )
             .outcome,
-        WeightCaptureOutcome.none,
+        WeightCaptureOutcome.capture,
       );
       expect(
         controller
             .onReading(
               reading(0.182),
-              receivedAt: start.add(const Duration(milliseconds: 1501)),
+              receivedAt: start.add(const Duration(milliseconds: 2)),
             )
             .outcome,
         WeightCaptureOutcome.capture,
@@ -163,30 +163,36 @@ void main() {
       );
     });
 
-    test('detecta una ráfaga continua y bloquea nuevas capturas', () {
-      final controller = WeightCaptureController();
+    test('no confunde varios Print manuales rápidos con envío continuo', () {
+      final controller = WeightCaptureController(
+        configuration: const WeightCaptureConfiguration(
+          range: WeightCaptureRange.restricted(
+            minimum: 0.150,
+            maximum: 0.250,
+            unit: WeightUnit.kilogram,
+          ),
+        ),
+      );
 
-      expect(
-        controller.onReading(reading(0.180), receivedAt: start).outcome,
-        WeightCaptureOutcome.capture,
-      );
-      expect(
-        controller
-            .onReading(
-              reading(0.180),
-              receivedAt: start.add(const Duration(milliseconds: 400)),
-            )
-            .outcome,
-        WeightCaptureOutcome.none,
-      );
+      for (var index = 0; index < 3; index++) {
+        expect(
+          controller
+              .onReading(
+                reading(0.180),
+                receivedAt: start.add(Duration(milliseconds: index * 300)),
+              )
+              .outcome,
+          WeightCaptureOutcome.capture,
+        );
+      }
       expect(
         controller
             .onReading(
-              reading(0.180),
-              receivedAt: start.add(const Duration(milliseconds: 800)),
+              reading(0.300),
+              receivedAt: start.add(const Duration(milliseconds: 900)),
             )
             .outcome,
-        WeightCaptureOutcome.none,
+        WeightCaptureOutcome.outOfRange,
       );
       expect(
         controller
@@ -195,25 +201,41 @@ void main() {
               receivedAt: start.add(const Duration(milliseconds: 1200)),
             )
             .outcome,
-        WeightCaptureOutcome.continuousInputDetected,
+        WeightCaptureOutcome.capture,
       );
+    });
+
+    test('detecta una ráfaga continua y bloquea nuevas capturas', () {
+      final controller = WeightCaptureController();
+
+      for (var index = 0; index < 4; index++) {
+        expect(
+          controller
+              .onReading(
+                reading(0.180),
+                receivedAt: start.add(Duration(milliseconds: index * 100)),
+              )
+              .outcome,
+          WeightCaptureOutcome.capture,
+        );
+      }
       expect(
         controller
             .onReading(
               reading(0.180),
-              receivedAt: start.add(const Duration(milliseconds: 1600)),
+              receivedAt: start.add(const Duration(milliseconds: 400)),
             )
             .outcome,
-        WeightCaptureOutcome.none,
+        WeightCaptureOutcome.continuousInputDetected,
       );
     });
 
     test('se recupera después de que cesa la trama continua', () {
       final controller = WeightCaptureController();
-      for (var index = 0; index < 4; index++) {
+      for (var index = 0; index < 5; index++) {
         controller.onReading(
           reading(0.180),
-          receivedAt: start.add(Duration(milliseconds: index * 400)),
+          receivedAt: start.add(Duration(milliseconds: index * 100)),
         );
       }
 

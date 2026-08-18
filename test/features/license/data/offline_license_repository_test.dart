@@ -42,6 +42,17 @@ void main() {
     );
   });
 
+  test('calcula el hash de los bytes exactos de la licencia', () async {
+    final preferences = await SharedPreferences.getInstance();
+    final store = _MemoryLicenseFileStore()..value = 'LICENCIA-1';
+    final repository = OfflineLicenseRepository(store, preferences);
+
+    expect(
+      await repository.loadSha256(),
+      'sha256:ddeffd686db09d20888fa89be192658415031e48fa604d1c4d76415badf5073a',
+    );
+  });
+
   test('reemplaza el archivo de licencia y limpia temporales', () async {
     final directory = await Directory.systemTemp.createTemp(
       'pondera-license-store-',

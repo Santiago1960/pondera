@@ -396,6 +396,27 @@ int64_t GetIntegerArgument(const flutter::EncodableMap& arguments,
   return fallback;
 }
 
+std::optional<std::string> ReadSystemIdentifier() {
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(
+          HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", 0,
+          KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
+    return std::nullopt;
+  }
+
+  wchar_t value[256]{};
+  DWORD type = 0;
+  DWORD size = sizeof(value);
+  const LONG status = RegQueryValueExW(
+      key, L"MachineGuid", nullptr, &type,
+      reinterpret_cast<LPBYTE>(value), &size);
+  RegCloseKey(key);
+  if (status != ERROR_SUCCESS || type != REG_SZ || value[0] == L'\0') {
+    return std::nullopt;
+  }
+  return Utf8FromUtf16(value);
+}
+
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -419,6 +440,27 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  device_fingerprint_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "bitgenial/device_fingerprint",
+          &flutter::StandardMethodCodec::GetInstance());
+  device_fingerprint_channel_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& call,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+             result) {
+        if (call.method_name() != "readSystemId") {
+          result->NotImplemented();
+          return;
+        }
+        const auto system_id = ReadSystemIdentifier();
+        if (!system_id || system_id->empty()) {
+          result->Error("device_identity_unavailable",
+                        "Windows device identity is unavailable.");
+          return;
+        }
+        result->Success(flutter::EncodableValue(*system_id));
+      });
   weight_capture_hotkey_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(),
@@ -572,6 +614,11 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (device_fingerprint_channel_) {
+    device_fingerprint_channel_->SetMethodCallHandler(nullptr);
+  }
+  device_fingerprint_channel_ = nullptr;
+
   if (f12_keyboard_hook_installed_) {
     SetF12KeyboardHookEnabled(GetHandle(), false);
     f12_keyboard_hook_installed_ = false;

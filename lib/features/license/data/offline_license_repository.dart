@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,8 +28,8 @@ class OfflineLicenseRepository {
   }
 
   Future<String?> load() async {
-    final storedValue = (await _fileStore.read())?.trim();
-    if (storedValue != null && storedValue.isNotEmpty) {
+    final storedValue = await _fileStore.read();
+    if (storedValue != null && storedValue.trim().isNotEmpty) {
       return storedValue;
     }
 
@@ -41,6 +43,18 @@ class OfflineLicenseRepository {
     await _writeAndVerify(legacyValue);
     await _preferences.remove(PreferenceKeys.signedLicense);
     return legacyValue;
+  }
+
+  Future<String?> loadSha256() async {
+    final encodedLicense = await load();
+    if (encodedLicense == null) {
+      return null;
+    }
+    final digest = await Sha256().hash(utf8.encode(encodedLicense));
+    final hex = digest.bytes
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return 'sha256:$hex';
   }
 
   Future<void> save(String encodedLicense) async {
@@ -79,8 +93,8 @@ class OfflineLicenseRepository {
 
   Future<void> _writeAndVerify(String encodedLicense) async {
     await _fileStore.write(encodedLicense);
-    final persistedValue = (await _fileStore.read())?.trim();
-    if (persistedValue != encodedLicense.trim()) {
+    final persistedValue = await _fileStore.read();
+    if (persistedValue != encodedLicense) {
       throw StateError('No se pudo verificar el archivo local de licencia.');
     }
   }

@@ -40,6 +40,9 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       weight_capture_hotkey_channel_;
 
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      device_fingerprint_channel_;
+
   bool f12_keyboard_hook_installed_ = false;
 };
 

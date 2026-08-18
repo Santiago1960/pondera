@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon.HIToolbox
 import FlutterMacOS
+import IOKit
 
 private let ponderaHotKeySignature: OSType = 0x504E4452 // PNDR
 private let ponderaF12HotKeyIdentifier: UInt32 = 1
@@ -16,6 +17,7 @@ private let ponderaHotKeyHandler: EventHandlerUPP = { _, _, userData in
 }
 
 class MainFlutterWindow: NSWindow {
+  private var deviceFingerprintChannel: FlutterMethodChannel?
   private var operatorAlertChannel: FlutterMethodChannel?
   private var operatorAlertPanel: NSPanel?
   private var operatorAlertDismissal: DispatchWorkItem?
@@ -31,6 +33,27 @@ class MainFlutterWindow: NSWindow {
     self.minSize = NSSize(width: 1040, height: 760)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    deviceFingerprintChannel = FlutterMethodChannel(
+      name: "bitgenial/device_fingerprint",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    deviceFingerprintChannel?.setMethodCallHandler { call, result in
+      guard call.method == "readSystemId" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard let systemId = readSystemIdentifier() else {
+        result(
+          FlutterError(
+            code: "device_identity_unavailable",
+            message: "macOS device identity is unavailable.",
+            details: nil
+          )
+        )
+        return
+      }
+      result(systemId)
+    }
     operatorAlertChannel = FlutterMethodChannel(
       name: "pondera/operator_alert",
       binaryMessenger: flutterViewController.engine.binaryMessenger
@@ -92,6 +115,7 @@ class MainFlutterWindow: NSWindow {
   }
 
   override func close() {
+    deviceFingerprintChannel?.setMethodCallHandler(nil)
     operatorAlertChannel?.setMethodCallHandler(nil)
     weightCaptureHotkeyChannel?.setMethodCallHandler(nil)
     dismissOperatorAlert()
@@ -256,4 +280,22 @@ class MainFlutterWindow: NSWindow {
     operatorAlertPanel?.close()
     operatorAlertPanel = nil
   }
+}
+
+private func readSystemIdentifier() -> String? {
+  let service = IOServiceGetMatchingService(
+    kIOMasterPortDefault,
+    IOServiceMatching("IOPlatformExpertDevice")
+  )
+  guard service != IO_OBJECT_NULL else {
+    return nil
+  }
+  defer { IOObjectRelease(service) }
+
+  return IORegistryEntryCreateCFProperty(
+    service,
+    "IOPlatformUUID" as CFString,
+    kCFAllocatorDefault,
+    0
+  )?.takeRetainedValue() as? String
 }

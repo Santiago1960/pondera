@@ -121,4 +121,59 @@ void main() {
     expect(preferences.getString(PreferenceKeys.demoStartedAt), isNull);
     expect(preferences.getString(PreferenceKeys.demoLastRun), isNull);
   });
+
+  test('elimina patrón y valor esperado de la receta', () async {
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.recipe: r'([0-9]+)',
+      PreferenceKeys.expectedValue: '0.16',
+    });
+    final preferences = await SharedPreferences.getInstance();
+
+    await SettingsRepository(preferences).clearRecipe();
+
+    expect(preferences.getString(PreferenceKeys.recipe), isNull);
+    expect(preferences.getString(PreferenceKeys.expectedValue), isNull);
+  });
+
+  test('conserva y actualiza la receta entre reinicios sin red', () async {
+    final preferences = await SharedPreferences.getInstance();
+    await SettingsRepository(
+      preferences,
+    ).saveRecipe(pattern: r'([0-9]+)', expectedValue: '16');
+    await SettingsRepository(
+      preferences,
+    ).saveRecipe(pattern: r'([0-9]+[.,][0-9]+)', expectedValue: '0.16');
+
+    final reloaded = SettingsRepository(preferences).load();
+
+    expect(reloaded.recipePattern, r'([0-9]+[.,][0-9]+)');
+    expect(reloaded.expectedValue, '0.16');
+  });
+
+  test('guarda fechas online sin modificar la demo local', () async {
+    final localStartedAt = DateTime(2026, 8, 1, 12);
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.demoStartedAt: localStartedAt.toIso8601String(),
+    });
+    final preferences = await SharedPreferences.getInstance();
+    final repository = SettingsRepository(preferences);
+
+    await repository.saveRecipeAccessDates(
+      trialStartedAt: DateTime.parse('2026-08-11T17:00:00-05:00'),
+      trialExpiresAt: DateTime.parse('2026-08-26T17:00:00-05:00'),
+    );
+
+    expect(
+      preferences.getString(PreferenceKeys.recipeAccessTrialStartedAt),
+      '2026-08-11T22:00:00.000Z',
+    );
+    expect(
+      preferences.getString(PreferenceKeys.recipeAccessTrialExpiresAt),
+      '2026-08-26T22:00:00.000Z',
+    );
+    expect(
+      preferences.getString(PreferenceKeys.demoStartedAt),
+      localStartedAt.toIso8601String(),
+    );
+  });
 }

@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -24,15 +23,20 @@ import '../../license/application/activation_request_service.dart';
 import '../../license/application/demo_license_controller.dart';
 import '../../license/application/offline_license_controller.dart';
 import '../../license/data/activation_request_exporter.dart';
+import '../../license/data/device_fingerprint.dart';
 import '../../license/data/installation_identity_repository.dart';
 import '../../license/data/license_file_importer.dart';
 import '../../license/data/license_key_registry.dart';
 import '../../license/data/license_verifier.dart';
 import '../../license/data/offline_license_repository.dart';
 import '../../license/domain/demo_license.dart';
+import '../../license/domain/license_identifier_generator.dart';
 import '../../license/domain/license_verification_result.dart';
 import '../../license/presentation/activation_request_dialog.dart';
 import '../../license/presentation/license_status_panel.dart';
+import '../../recipe/domain/recipe_access_request.dart';
+import '../../recipe/domain/recipe_access_response.dart';
+import '../../recipe/domain/recipe_transport_policy.dart';
 import '../../recipe/presentation/recipe_actions_panel.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_parser.dart';
@@ -76,8 +80,15 @@ class _MainScreenState extends State<MainScreen> {
   String _deviceIp = '192.168.100.134';
   int _devicePort = 3004;
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook/pondera-recipe';
+  static const _useRecipeAccessV1 = bool.fromEnvironment(
+    'PONDERA_RECIPE_ACCESS_V1',
+  );
+  static const _recipeAccessV1Url = String.fromEnvironment(
+    'PONDERA_RECIPE_ACCESS_URL',
+    defaultValue:
+        'https://n8n.bitgenial.com/webhook-test/pondera-recipe-v1-test',
+  );
   String _expectedValue = '';
-  final bool _allowUntrustedN8nCertificateFallback = true;
 
   Socket? _socket;
   SerialPort? _serialPort;
@@ -87,10 +98,12 @@ class _MainScreenState extends State<MainScreen> {
   Timer? _reconnectTimer;
   Timer? _demoTimer;
   Timer? _telemetryRefreshTimer;
+  Timer? _frameFlushTimer;
   bool _isConnected = false;
   bool _isTyping = false;
   bool _manualDisconnectRequested = false;
   bool _captureStatusIsError = false;
+  bool _missingContinuousInputReported = false;
 
   final List<RawDataLogEntry> _receivedDataLog = [];
   int _receptionSequence = 0;
@@ -157,6 +170,7 @@ class _MainScreenState extends State<MainScreen> {
 
   late SettingsRepository _settingsRepository;
   late DemoLicenseController _demoLicenseController;
+  late OfflineLicenseRepository _offlineLicenseRepository;
   ActivationRequestService? _activationRequestService;
   OfflineLicenseController? _offlineLicenseController;
   final ActivationRequestExporter _activationRequestExporter =
@@ -190,6 +204,7 @@ class _MainScreenState extends State<MainScreen> {
   void dispose() {
     _demoTimer?.cancel();
     _telemetryRefreshTimer?.cancel();
+    _frameFlushTimer?.cancel();
     unawaited(_setF12HotkeyEnabled(false));
     _weightCaptureHotkeyChannel.setMethodCallHandler(null);
     _disconnect();
@@ -213,9 +228,10 @@ class _MainScreenState extends State<MainScreen> {
         ? packageInfo.version
         : '${packageInfo.version}+${packageInfo.buildNumber}';
     _activationRequestService = ActivationRequestService(identityRepository);
+    _offlineLicenseRepository = await OfflineLicenseRepository.create();
     _offlineLicenseController = OfflineLicenseController(
       identityRepository,
-      await OfflineLicenseRepository.create(),
+      _offlineLicenseRepository,
       LicenseVerifier(LicenseKeyRegistry.forCurrentBuild()),
     );
     _demoLicenseController = DemoLicenseController(_settingsRepository);
@@ -698,6 +714,8 @@ class _MainScreenState extends State<MainScreen> {
         range: activeConfiguration.range,
       ),
     );
+    _missingContinuousInputReported = false;
+    _scalePollingState.reset();
     await _settingsRepository.saveCaptureMode(mode.name);
     if (mode != WeightCaptureMode.keyboardF12) {
       await _setF12HotkeyEnabled(false);
@@ -891,17 +909,14 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _clearCaptureErrorState() {
+    if (_missingContinuousInputReported) {
+      return;
+    }
     final hadError = _captureStatusIsError;
     _captureStatusIsError = false;
     if (hadError) {
       _scheduleTelemetryRefresh();
     }
-  }
-
-  bool _isCertificateTrustError(Object error) {
-    final message = error.toString();
-    return message.contains('CERTIFICATE_VERIFY_FAILED') ||
-        message.contains('unable to get local issuer certificate');
   }
 
   Future<void> _openUserManual() async {
@@ -936,40 +951,131 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  Future<http.Response> _postToN8n(String rawData, String expectedValue) async {
-    final uri = Uri.parse(_n8nUrl);
+  Future<({http.Response response, String? requestId})> _postToN8n(
+    String rawData,
+    String expectedValue,
+  ) async {
+    final String? requestId;
+    final Uri uri;
+    final String body;
+    if (_useRecipeAccessV1) {
+      final licensePayload = _offlineLicenseResult?.payload;
+      final licenseFileSha256 = licensePayload == null
+          ? null
+          : await _offlineLicenseRepository.loadSha256();
+      if (licensePayload != null && licenseFileSha256 == null) {
+        throw StateError('No se pudo leer la licencia instalada.');
+      }
+      final request = RecipeAccessRequest(
+        requestId: LicenseIdentifierGenerator().createRecipeAccessRequestId(),
+        installationId: _installationId,
+        deviceFingerprintHash: await const DeviceFingerprint().readHash(),
+        platform: Platform.operatingSystem,
+        appVersion: _appVersion,
+        rawData: rawData,
+        expectedValue: expectedValue.trim(),
+        createdAt: DateTime.now().toUtc(),
+        licenseId: licensePayload?.licenseId,
+        licenseFileSha256: licenseFileSha256,
+      );
+      requestId = request.requestId;
+      uri = Uri.parse(_recipeAccessV1Url);
+      body = request.encode();
+    } else {
+      requestId = null;
+      uri = Uri.parse(_n8nUrl);
+      body = jsonEncode({
+        'trama': rawData,
+        'valor_esperado': expectedValue,
+        'metadata': _buildN8nMetadata(),
+      });
+    }
+
     final headers = {'Content-Type': 'application/json'};
-    final body = jsonEncode({
-      'trama': rawData,
-      'valor_esperado': expectedValue,
-      'metadata': _buildN8nMetadata(),
-    });
+    final response = await http
+        .post(uri, headers: headers, body: body)
+        .timeout(AppConfig.n8nRequestTimeout);
+    return (response: response, requestId: requestId);
+  }
+
+  Future<void> _handleRecipeAccessResponse({
+    required http.Response httpResponse,
+    required String requestId,
+    required String expectedValue,
+  }) async {
     try {
-      return await http
-          .post(uri, headers: headers, body: body)
-          .timeout(AppConfig.n8nRequestTimeout);
-    } on HandshakeException catch (e) {
-      if (!_allowUntrustedN8nCertificateFallback ||
-          !_isCertificateTrustError(e)) {
-        rethrow;
+      final response = RecipeAccessResponse.decode(
+        httpResponse.body,
+        expectedRequestId: requestId,
+      );
+      final validHttpDecision = switch (httpResponse.statusCode) {
+        200 => response.decision == RecipeAccessDecision.allow,
+        403 => response.decision == RecipeAccessDecision.deny,
+        400 ||
+        409 ||
+        429 ||
+        500 ||
+        503 => response.decision == RecipeAccessDecision.error,
+        _ => false,
+      };
+      if (!validHttpDecision) {
+        throw const FormatException('Respuesta HTTP incoherente.');
+      }
+      final newRegex = response.recipeAction == RecipeAction.replace
+          ? response.regexPattern!
+          : null;
+      if (newRegex != null) {
+        RegExp(newRegex);
+      }
+      await _settingsRepository.saveRecipeAccessDates(
+        trialStartedAt: response.trialStartedAt,
+        trialExpiresAt: response.trialExpiresAt,
+        graceUntil: response.graceUntil,
+      );
+
+      if (response.recipeAction == RecipeAction.replace) {
+        await _settingsRepository.saveRecipe(
+          pattern: newRegex!,
+          expectedValue: expectedValue,
+        );
+        if (mounted) {
+          setState(() {
+            _savedRegex = newRegex;
+            _expectedValue = expectedValue;
+            _uiStatusMessage = response.message;
+          });
+        }
+        return;
       }
 
-      final expectedPort = uri.hasPort
-          ? uri.port
-          : (uri.scheme == 'https' ? 443 : 80);
-      final httpClient = HttpClient()
-        ..connectionTimeout = AppConfig.n8nRequestTimeout
-        ..badCertificateCallback = (certificate, host, port) {
-          return host == uri.host && port == expectedPort;
-        };
-      final client = IOClient(httpClient);
-      try {
-        final response = await client
-            .post(uri, headers: headers, body: body)
-            .timeout(AppConfig.n8nRequestTimeout);
-        return response;
-      } finally {
-        client.close();
+      if (response.recipeAction == RecipeAction.delete) {
+        await _settingsRepository.clearRecipe();
+        if (mounted) {
+          setState(() {
+            _savedRegex = '';
+            _expectedValue = '';
+            _cleanWeightDisplay = 'Sin receta';
+            _uiStatusMessage = response.message;
+          });
+        }
+        return;
+      }
+
+      if (mounted) {
+        setState(() {
+          _uiStatusMessage =
+              isRecipeServiceUnavailableStatus(httpResponse.statusCode)
+              ? recipeServiceUnavailableMessage
+              : response.message;
+        });
+      }
+    } on FormatException catch (error) {
+      debugPrint('Respuesta recipe_access inválida: $error');
+      if (mounted) {
+        setState(() {
+          _uiStatusMessage =
+              'Respuesta de autorización inválida. La receta actual no fue modificada.';
+        });
       }
     }
   }
@@ -1095,7 +1201,16 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     try {
-      final response = await _postToN8n(rawData, expectedValue);
+      final result = await _postToN8n(rawData, expectedValue);
+      final response = result.response;
+      if (result.requestId case final requestId?) {
+        await _handleRecipeAccessResponse(
+          httpResponse: response,
+          requestId: requestId,
+          expectedValue: expectedValue,
+        );
+        return;
+      }
 
       if (response.statusCode == 200) {
         dynamic responseData;
@@ -1150,6 +1265,11 @@ class _MainScreenState extends State<MainScreen> {
                 'n8n respondió 200, pero no devolvió regex_pattern.';
           });
         }
+      } else if (isRecipeServiceUnavailableStatus(response.statusCode) &&
+          mounted) {
+        setState(() {
+          _uiStatusMessage = recipeServiceUnavailableMessage;
+        });
       } else if (mounted) {
         setState(() {
           _uiStatusMessage = 'n8n respondió HTTP ${response.statusCode}.';
@@ -1158,14 +1278,14 @@ class _MainScreenState extends State<MainScreen> {
     } on TimeoutException {
       if (mounted) {
         setState(() {
-          _uiStatusMessage = 'n8n tardó más de 45 segundos en responder.';
+          _uiStatusMessage = recipeServiceUnavailableMessage;
         });
       }
     } catch (e) {
       debugPrint('Error de conexión con n8n: $e');
       if (mounted) {
         setState(() {
-          _uiStatusMessage = 'Error de conexión con n8n.';
+          _uiStatusMessage = recipeServiceUnavailableMessage;
         });
       }
     } finally {
@@ -1295,7 +1415,15 @@ class _MainScreenState extends State<MainScreen> {
         'Polling enviados: $_pollRequestsSent | Bytes útiles recibidos: $_bytesReceived | Último bloque $sourceLabel: $byteCount bytes$ignoredNote';
     _scheduleTelemetryRefresh();
 
-    _processAccumulatedData();
+    _frameFlushTimer?.cancel();
+    if (_selectedCaptureMode.requiresContinuousInput) {
+      _processAccumulatedData();
+      return;
+    }
+    _frameFlushTimer = Timer(
+      AppConfig.manualPrintQuietPeriod,
+      _processAccumulatedData,
+    );
   }
 
   void _scheduleTelemetryRefresh() {
@@ -1419,6 +1547,7 @@ end tell
       _pollRequestsSent = 0;
       _bytesReceived = 0;
       _serialIgnoredBytes = 0;
+      _missingContinuousInputReported = false;
       _scalePollingState.reset();
 
       if (mounted) {
@@ -1435,16 +1564,37 @@ end tell
         if (!_isConnected) {
           return;
         }
-        if (!_selectedCaptureMode.requiresContinuousInput) {
-          _scalePollingState.reset();
-          return;
-        }
         final now = DateTime.now();
-        if (_scalePollingState.hasTimedOut(now)) {
-          _handleDisconnect('El indicador no respondió a la consulta de peso.');
+        final trackResponse = _selectedCaptureMode.requiresContinuousInput;
+        if (trackResponse && _scalePollingState.hasTimedOut(now)) {
+          _scalePollingState.completeTimeout();
+          if (_scalePollingState.consecutiveTimeouts >=
+                  AppConfig.scaleResponseTimeoutLimit &&
+              !_missingContinuousInputReported) {
+            _missingContinuousInputReported = true;
+            _captureStatusIsError = true;
+            _uiStatusMessage =
+                'No se reciben tramas continuas. Revise el modo del indicador.';
+            _networkDiagnostics =
+                'Socket conectado, sin respuesta a '
+                '${_scalePollingState.consecutiveTimeouts} consultas consecutivas.';
+            unawaited(
+              _showOperatorAlert(
+                title: 'Configuración incompatible',
+                message:
+                    'Pondera requiere recepción continua para F12 o automático, '
+                    'pero el indicador no está enviando tramas. Configure el '
+                    'indicador en envío continuo o cambie Pondera a Print manual.',
+              ),
+            );
+            _scheduleTelemetryRefresh();
+          }
           return;
         }
-        if (!_scalePollingState.beginRequest(now)) {
+        if (!_scalePollingState.beginRequest(
+          now,
+          trackResponse: trackResponse,
+        )) {
           return;
         }
 
@@ -1464,6 +1614,13 @@ end tell
       _socket!.listen(
         (List<int> data) {
           _scalePollingState.completeResponse();
+          if (_missingContinuousInputReported &&
+              _scalePollingState.consecutiveResponses >=
+                  AppConfig.scaleResponseRecoveryLimit) {
+            _missingContinuousInputReported = false;
+            _captureStatusIsError = false;
+            _uiStatusMessage = 'Conectado. Controlando flujo activamente.';
+          }
           final String chunk = utf8.decode(data, allowMalformed: true);
           _appendIncomingChunk(chunk, data.length, sourceLabel: 'TCP');
         },
@@ -1568,13 +1725,18 @@ end tell
     }
   }
 
-  void _processAccumulatedData() async {
-    if (_networkAccumulator.isEmpty) {
+  void _processAccumulatedData() {
+    final rawData = _networkAccumulator;
+    _networkAccumulator = '';
+    if (rawData.isEmpty) {
       return;
     }
+    unawaited(_processRawData(rawData));
+  }
 
+  Future<void> _processRawData(String rawData) async {
     _receivedDataLog.add(
-      RawDataLogEntry(rawData: _networkAccumulator, receivedAt: DateTime.now()),
+      RawDataLogEntry(rawData: rawData, receivedAt: DateTime.now()),
     );
     _receptionSequence++;
     if (_receivedDataLog.length > 3) {
@@ -1584,13 +1746,12 @@ end tell
 
     if (_savedRegex.isNotEmpty) {
       final reading = ReadingParser.parse(
-        _networkAccumulator,
+        rawData,
         pattern: _savedRegex,
         expectedValue: _expectedValue,
       );
       if (reading != null) {
         final nuevoPesoOriginal = reading.formattedWeight;
-        _networkAccumulator = '';
 
         final parsedWeight = reading.numericValue;
         if (parsedWeight == null) {
@@ -1624,10 +1785,6 @@ end tell
         _cleanWeightDisplay = pesoFinalAInyectar;
         _scheduleTelemetryRefresh();
 
-        if (_isTyping) {
-          return;
-        }
-
         final now = DateTime.now();
         final decision = _weightCaptureController.onReading(
           WeightCaptureReading(
@@ -1637,14 +1794,17 @@ end tell
           ),
           receivedAt: now,
         );
+        if (_isTyping &&
+            _selectedCaptureMode == WeightCaptureMode.automaticStable &&
+            decision.shouldCapture) {
+          return;
+        }
         await _applyWeightCaptureDecision(
           decision,
           displayText: pesoFinalAInyectar,
           zeroDisplayText: nuevoPesoOriginal,
         );
       }
-    } else {
-      _networkAccumulator = '';
     }
   }
 
@@ -1696,6 +1856,9 @@ end tell
 
   void _releaseConnectionResources() {
     _pollingTimer?.cancel();
+    _frameFlushTimer?.cancel();
+    _frameFlushTimer = null;
+    _networkAccumulator = '';
     _socket?.destroy();
     _socket = null;
     _serialSubscription?.cancel();
@@ -1706,6 +1869,7 @@ end tell
     _serialPort?.dispose();
     _serialPort = null;
     _isConnected = false;
+    _missingContinuousInputReported = false;
     _scalePollingState.reset();
   }
 

@@ -156,8 +156,26 @@ class SettingsRepository {
     await _preferences.setString(PreferenceKeys.expectedValue, expectedValue);
   }
 
+  Future<void> saveRecipeAccessDates({
+    DateTime? trialStartedAt,
+    DateTime? trialExpiresAt,
+    DateTime? graceUntil,
+  }) async {
+    final values = {
+      PreferenceKeys.recipeAccessTrialStartedAt: trialStartedAt,
+      PreferenceKeys.recipeAccessTrialExpiresAt: trialExpiresAt,
+      PreferenceKeys.recipeAccessGraceUntil: graceUntil,
+    };
+    for (final MapEntry(key: key, value: value) in values.entries) {
+      if (value != null) {
+        await _preferences.setString(key, value.toUtc().toIso8601String());
+      }
+    }
+  }
+
   Future<void> clearRecipe() async {
     await _preferences.remove(PreferenceKeys.recipe);
+    await _preferences.remove(PreferenceKeys.expectedValue);
   }
 
   Future<void> lockDemo() async {

@@ -8,6 +8,8 @@ class LicenseIdentifierGenerator {
 
   String createInstallationId() => 'INSTALL-${_uuid()}';
 
+  String createRecipeAccessRequestId() => 'RAC-${_uuid()}';
+
   String createRequestId() {
     final value = _bytes(4)
         .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
