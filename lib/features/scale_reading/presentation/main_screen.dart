@@ -40,6 +40,7 @@ import '../../recipe/domain/recipe_transport_policy.dart';
 import '../../recipe/presentation/recipe_actions_panel.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_parser.dart';
+import '../domain/serial_frame_decoder.dart';
 import '../domain/weight_capture_controller.dart';
 import '../domain/weight_converter.dart';
 import '../domain/weight_unit.dart';
@@ -94,6 +95,9 @@ class _MainScreenState extends State<MainScreen> {
   SerialPort? _serialPort;
   SerialPortReader? _serialReader;
   StreamSubscription<Uint8List>? _serialSubscription;
+  final SerialFrameDecoder _serialFrameDecoder = SerialFrameDecoder(
+    maxFrameBytes: AppConfig.maxScaleAccumulatorCharacters,
+  );
   Timer? _pollingTimer;
   Timer? _reconnectTimer;
   Timer? _demoTimer;
@@ -1365,32 +1369,6 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
-  ({String text, int ignoredBytes}) _cleanSerialChunk(List<int> data) {
-    final buffer = StringBuffer();
-    var ignoredBytes = 0;
-
-    for (final byte in data) {
-      final isLineSeparator = byte == 10 || byte == 13;
-      final isTab = byte == 9;
-      final isPrintableAscii = byte >= 32 && byte <= 126;
-      final isUtf8TextByte = byte >= 128;
-
-      if (isLineSeparator || isTab || isPrintableAscii || isUtf8TextByte) {
-        buffer.writeCharCode(byte);
-      } else {
-        ignoredBytes++;
-      }
-    }
-
-    final text = buffer.toString();
-    if (text.trim().isEmpty && _networkAccumulator.trim().isEmpty) {
-      ignoredBytes += data.length - ignoredBytes;
-      return (text: '', ignoredBytes: ignoredBytes);
-    }
-
-    return (text: text, ignoredBytes: ignoredBytes);
-  }
-
   void _appendIncomingChunk(
     String chunk,
     int byteCount, {
@@ -1424,6 +1402,29 @@ class _MainScreenState extends State<MainScreen> {
       AppConfig.manualPrintQuietPeriod,
       _processAccumulatedData,
     );
+  }
+
+  void _handleSerialData(Uint8List data) {
+    final decoded = _serialFrameDecoder.add(data);
+    _bytesReceived += data.length;
+    _serialIgnoredBytes += decoded.ignoredBytes;
+    _networkDiagnostics =
+        'RS-232 escuchando | Bytes recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
+    _scheduleTelemetryRefresh();
+
+    _frameFlushTimer?.cancel();
+    for (final frame in decoded.frames) {
+      unawaited(_processRawData(frame));
+    }
+
+    if (_serialFrameDecoder.hasPendingUnframedData) {
+      _frameFlushTimer = Timer(AppConfig.manualPrintQuietPeriod, () {
+        final frame = _serialFrameDecoder.flushPendingUnframedData();
+        if (frame != null && frame.trim().isNotEmpty) {
+          unawaited(_processRawData(frame));
+        }
+      });
+    }
   }
 
   void _scheduleTelemetryRefresh() {
@@ -1677,6 +1678,7 @@ end tell
       _serialReader = SerialPortReader(port);
       _isConnected = true;
       _networkAccumulator = '';
+      _serialFrameDecoder.reset();
       _pollRequestsSent = 0;
       _bytesReceived = 0;
       _serialIgnoredBytes = 0;
@@ -1690,28 +1692,7 @@ end tell
       }
 
       _serialSubscription = _serialReader!.stream.listen(
-        (Uint8List data) {
-          final cleanedChunk = _cleanSerialChunk(data);
-          if (cleanedChunk.ignoredBytes > 0) {
-            _serialIgnoredBytes += cleanedChunk.ignoredBytes;
-          }
-
-          if (cleanedChunk.text.isEmpty || cleanedChunk.ignoredBytes > 0) {
-            _networkDiagnostics =
-                'RS-232 escuchando | Bytes útiles recibidos: $_bytesReceived | Bytes ignorados: $_serialIgnoredBytes';
-            _scheduleTelemetryRefresh();
-          }
-
-          if (cleanedChunk.text.isEmpty) {
-            return;
-          }
-
-          _appendIncomingChunk(
-            cleanedChunk.text,
-            data.length - cleanedChunk.ignoredBytes,
-            sourceLabel: 'RS-232',
-          );
-        },
+        _handleSerialData,
         onError: (error) {
           _handleDisconnect('Error de puerto serial: $error');
         },
@@ -1859,6 +1840,7 @@ end tell
     _frameFlushTimer?.cancel();
     _frameFlushTimer = null;
     _networkAccumulator = '';
+    _serialFrameDecoder.reset();
     _socket?.destroy();
     _socket = null;
     _serialSubscription?.cancel();
