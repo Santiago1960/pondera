@@ -1,4 +1,5 @@
 #include "flutter_window.h"
+#include "utils.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -42,7 +43,6 @@ HWND g_operator_alert_window = nullptr;
 std::unique_ptr<OperatorAlertState> g_operator_alert_state;
 HHOOK g_f12_keyboard_hook = nullptr;
 HWND g_f12_target_window = nullptr;
-bool g_f12_key_is_down = false;
 
 LRESULT CALLBACK F12KeyboardHookProc(int code, WPARAM wparam,
                                     LPARAM lparam) noexcept {
@@ -51,14 +51,12 @@ LRESULT CALLBACK F12KeyboardHookProc(int code, WPARAM wparam,
         reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
     if (keyboard_event->vkCode == VK_F12) {
       if (wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN) {
-        if (!g_f12_key_is_down && g_f12_target_window) {
-          g_f12_key_is_down = true;
-          PostMessage(g_f12_target_window, kF12PressedMessage, 0, 0);
-        }
         return 1;
       }
       if (wparam == WM_KEYUP || wparam == WM_SYSKEYUP) {
-        g_f12_key_is_down = false;
+        if (g_f12_target_window) {
+          PostMessage(g_f12_target_window, kF12PressedMessage, 0, 0);
+        }
         return 1;
       }
     }
@@ -74,7 +72,6 @@ bool SetF12KeyboardHookEnabled(HWND target_window, bool enabled) {
     }
 
     g_f12_target_window = target_window;
-    g_f12_key_is_down = false;
     g_f12_keyboard_hook = SetWindowsHookExW(
         WH_KEYBOARD_LL, F12KeyboardHookProc, GetModuleHandle(nullptr), 0);
     if (!g_f12_keyboard_hook) {
@@ -85,7 +82,6 @@ bool SetF12KeyboardHookEnabled(HWND target_window, bool enabled) {
   }
 
   g_f12_target_window = nullptr;
-  g_f12_key_is_down = false;
   if (!g_f12_keyboard_hook) {
     return true;
   }

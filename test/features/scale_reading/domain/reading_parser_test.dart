@@ -110,5 +110,27 @@ void main() {
         isNull,
       );
     });
+
+    test('no intenta extraer otro número si la receta no coincide', () {
+      final result = ReadingParser.parse(
+        r'N 0,370T 0,000C0\r\n',
+        pattern: r'B\s+([0-9]+[,.][0-9]+)T',
+        expectedValue: '0,370',
+      );
+
+      expect(result, isNull);
+    });
+
+    test('extrae únicamente el grupo definido por la receta', () {
+      final result = ReadingParser.parse(
+        r'N 0,370T 0,000C0\r\n',
+        pattern: r'N\s+([0-9]+[,.][0-9]+)T',
+        expectedValue: '0,370',
+      );
+
+      expect(result, isNotNull);
+      expect(result!.formattedWeight, '0,370');
+      expect(result.numericValue, 0.370);
+    });
   });
 }

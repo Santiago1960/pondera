@@ -39,6 +39,7 @@ import '../../recipe/domain/recipe_access_response.dart';
 import '../../recipe/domain/recipe_transport_policy.dart';
 import '../../recipe/presentation/recipe_actions_panel.dart';
 import '../../settings/data/settings_repository.dart';
+import '../domain/reading_frame_splitter.dart';
 import '../domain/reading_parser.dart';
 import '../domain/weight_capture_controller.dart';
 import '../domain/weight_converter.dart';
@@ -112,6 +113,8 @@ class _MainScreenState extends State<MainScreen> {
   String _cleanWeightDisplay = '---';
   String _uiStatusMessage = 'Desconectado';
   String _networkAccumulator = '';
+  final ReadingFrameAssembler _continuousFrameAssembler =
+      ReadingFrameAssembler();
   String _networkDiagnostics = 'Sin actividad de red.';
   int _pollRequestsSent = 0;
   int _bytesReceived = 0;
@@ -1417,7 +1420,17 @@ class _MainScreenState extends State<MainScreen> {
 
     _frameFlushTimer?.cancel();
     if (_selectedCaptureMode.requiresContinuousInput) {
-      _processAccumulatedData();
+      final split = _continuousFrameAssembler.assemble(_networkAccumulator);
+      _networkAccumulator = split.remainder;
+      for (final frame in split.completeFrames) {
+        unawaited(_processRawData(frame));
+      }
+      if (split.shouldFlushRemainderAfterQuietPeriod) {
+        _frameFlushTimer = Timer(
+          AppConfig.continuousFrameQuietPeriod,
+          _processAccumulatedData,
+        );
+      }
       return;
     }
     _frameFlushTimer = Timer(
@@ -1750,61 +1763,71 @@ end tell
         pattern: _savedRegex,
         expectedValue: _expectedValue,
       );
-      if (reading != null) {
-        final nuevoPesoOriginal = reading.formattedWeight;
+      if (reading == null) {
+        return;
+      }
 
-        final parsedWeight = reading.numericValue;
-        if (parsedWeight == null) {
-          _weightCaptureController.clearReading();
-          _cleanWeightDisplay = '---';
-          if (_selectedCaptureMode != WeightCaptureMode.indicatorPrint) {
-            _clearCaptureErrorState();
-            _scheduleTelemetryRefresh();
-            return;
-          }
-          _uiStatusMessage = 'La lectura recibida no contiene un peso válido.';
-          _captureStatusIsError = true;
-          unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      final nuevoPesoOriginal = reading.formattedWeight;
+
+      final parsedWeight = reading.numericValue;
+      if (parsedWeight == null) {
+        _weightCaptureController.clearReading();
+        _cleanWeightDisplay = '---';
+        if (_selectedCaptureMode != WeightCaptureMode.indicatorPrint) {
+          _clearCaptureErrorState();
           _scheduleTelemetryRefresh();
           return;
         }
-
-        final double valorConvertido = WeightConverter.convert(
-          parsedWeight,
-          from: _selectedInputUnit,
-          to: _selectedOutputUnit,
-        );
-        final valorString = valorConvertido.toStringAsFixed(
-          reading.decimalPlaces,
-        );
-        final pesoFinalAInyectar = ReadingParser.formatWeight(
-          valorString,
-          expectedValue: _expectedValue,
-        );
-
-        _cleanWeightDisplay = pesoFinalAInyectar;
+        _uiStatusMessage = 'La lectura recibida no contiene un peso válido.';
+        _captureStatusIsError = true;
+        unawaited(_showOperatorAlert(message: _uiStatusMessage));
         _scheduleTelemetryRefresh();
-
-        final now = DateTime.now();
-        final decision = _weightCaptureController.onReading(
-          WeightCaptureReading(
-            value: parsedWeight,
-            unit: _selectedInputUnit,
-            captureText: pesoFinalAInyectar,
-          ),
-          receivedAt: now,
-        );
-        if (_isTyping &&
-            _selectedCaptureMode == WeightCaptureMode.automaticStable &&
-            decision.shouldCapture) {
-          return;
-        }
-        await _applyWeightCaptureDecision(
-          decision,
-          displayText: pesoFinalAInyectar,
-          zeroDisplayText: nuevoPesoOriginal,
-        );
+        return;
       }
+
+      final double valorConvertido = WeightConverter.convert(
+        parsedWeight,
+        from: _selectedInputUnit,
+        to: _selectedOutputUnit,
+      );
+      final valorString = valorConvertido.toStringAsFixed(
+        reading.decimalPlaces,
+      );
+      final pesoFinalAInyectar = ReadingParser.formatWeight(
+        valorString,
+        expectedValue: _expectedValue,
+      );
+
+      _cleanWeightDisplay = pesoFinalAInyectar;
+      _scheduleTelemetryRefresh();
+
+      final now = DateTime.now();
+      final wasWaitingForZero = _weightCaptureController.waitingForZero;
+      final decision = _weightCaptureController.onReading(
+        WeightCaptureReading(
+          value: parsedWeight,
+          unit: _selectedInputUnit,
+          captureText: pesoFinalAInyectar,
+        ),
+        receivedAt: now,
+      );
+      if (_selectedCaptureMode == WeightCaptureMode.automaticStable &&
+          wasWaitingForZero &&
+          !_weightCaptureController.waitingForZero) {
+        _captureStatusIsError = false;
+        _uiStatusMessage = 'Cero detectado. Esperando un peso estable.';
+        _scheduleTelemetryRefresh();
+      }
+      if (_isTyping &&
+          _selectedCaptureMode == WeightCaptureMode.automaticStable &&
+          decision.shouldCapture) {
+        return;
+      }
+      await _applyWeightCaptureDecision(
+        decision,
+        displayText: pesoFinalAInyectar,
+        zeroDisplayText: nuevoPesoOriginal,
+      );
     }
   }
 
@@ -1859,6 +1882,7 @@ end tell
     _frameFlushTimer?.cancel();
     _frameFlushTimer = null;
     _networkAccumulator = '';
+    _continuousFrameAssembler.reset();
     _socket?.destroy();
     _socket = null;
     _serialSubscription?.cancel();
