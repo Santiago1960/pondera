@@ -84,11 +84,12 @@ class _MainScreenState extends State<MainScreen> {
   final String _n8nUrl = 'https://n8n.bitgenial.com/webhook/pondera-recipe';
   static const _useRecipeAccessV1 = bool.fromEnvironment(
     'PONDERA_RECIPE_ACCESS_V1',
+    defaultValue: true,
   );
   static const _recipeAccessV1Url = String.fromEnvironment(
     'PONDERA_RECIPE_ACCESS_URL',
     defaultValue:
-        'https://n8n.bitgenial.com/webhook-test/pondera-recipe-v1-test',
+        'https://n8n.bitgenial.com/webhook/pondera-recipe-v1-test',
   );
   String _expectedValue = '';
 
