@@ -982,8 +982,16 @@ class _MainScreenState extends State<MainScreen> {
         rawData: rawData,
         expectedValue: expectedValue.trim(),
         createdAt: DateTime.now().toUtc(),
+        deviceLabel: licensePayload?.deviceLabel,
         licenseId: licensePayload?.licenseId,
         licenseFileSha256: licenseFileSha256,
+        customerId: licensePayload?.customerId,
+        customerName: licensePayload?.customerName,
+        siteId: licensePayload?.siteId,
+        siteName: licensePayload?.siteName,
+        city: licensePayload?.city,
+        assetTag: licensePayload?.assetTag,
+        currentRecipePattern: _savedRegex.isEmpty ? null : _savedRegex,
       );
       requestId = request.requestId;
       uri = Uri.parse(_recipeAccessV1Url);
@@ -1194,7 +1202,11 @@ class _MainScreenState extends State<MainScreen> {
       );
       return;
     }
-    final rawData = _receivedDataLog.last.rawData;
+    final latestRawData = _receivedDataLog.last.rawData;
+    final completeFrames = ReadingFrameSplitter.splitComplete(
+      latestRawData,
+    ).completeFrames;
+    final rawData = completeFrames.lastOrNull ?? latestRawData;
     final expectedValue = await _requestExpectedValue();
     if (expectedValue == null || !mounted) {
       return;

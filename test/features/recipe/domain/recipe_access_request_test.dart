@@ -16,12 +16,42 @@ void main() {
       rawData: '\u00020001 000000 B 0,16T 0,00N 0,16\r\n',
       expectedValue: '0,16',
       createdAt: DateTime(2026, 8, 11, 12),
-      licenseId: 'LIC-AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+      deviceLabel: 'Balanza recepción',
+      licenseId: 'SNCA-2026-0001',
       licenseFileSha256: 'sha256:${'b' * 64}',
+      customerId: 'CLI-001',
+      customerName: 'Cliente Uno',
+      siteId: 'SEDE-001',
+      siteName: 'Planta Norte',
+      city: 'Quito',
+      assetTag: 'ACT-001',
+      currentRecipePattern: r'N\s+([0-9]+[,.][0-9]+)',
     );
 
     final json = request.toJson();
 
+    expect(json.keys.toSet(), {
+      'schema_version',
+      'request_id',
+      'product',
+      'platform',
+      'app_version',
+      'created_at',
+      'installation_id',
+      'device_fingerprint_hash',
+      'device_label',
+      'license_id',
+      'license_file_sha256',
+      'customer_id',
+      'customer_name',
+      'site_id',
+      'site_name',
+      'city',
+      'asset_tag',
+      'current_recipe_pattern',
+      'trama',
+      'valor_esperado',
+    });
     expect(
       json['request_id'],
       matches(
@@ -38,9 +68,15 @@ void main() {
     );
     expect(json['license_id'], request.licenseId);
     expect(json['license_file_sha256'], request.licenseFileSha256);
+    expect(json['device_label'], 'Balanza recepción');
+    expect(json['customer_id'], 'CLI-001');
+    expect(json['site_id'], 'SEDE-001');
+    expect(json['city'], 'Quito');
+    expect(json['asset_tag'], 'ACT-001');
+    expect(json['current_recipe_pattern'], request.currentRecipePattern);
   });
 
-  test('omite ambos campos de licencia durante la prueba', () {
+  test('mantiene todos los campos con null durante la prueba', () {
     final generator = LicenseIdentifierGenerator(random: Random(8));
     final json = RecipeAccessRequest(
       requestId: generator.createRecipeAccessRequestId(),
@@ -53,8 +89,11 @@ void main() {
       createdAt: DateTime.utc(2026, 8, 11),
     ).toJson();
 
-    expect(json, isNot(contains('license_id')));
-    expect(json, isNot(contains('license_file_sha256')));
+    expect(json['license_id'], isNull);
+    expect(json['license_file_sha256'], isNull);
+    expect(json['customer_id'], isNull);
+    expect(json['site_id'], isNull);
+    expect(json['current_recipe_pattern'], isNull);
   });
 
   test('rechaza una licencia incompleta', () {
@@ -68,7 +107,7 @@ void main() {
       rawData: 'PESO 0.16',
       expectedValue: '0.16',
       createdAt: DateTime.utc(2026, 8, 11),
-      licenseId: 'LIC-AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE',
+      licenseId: 'SNCA-2026-0001',
     );
 
     expect(request.toJson, throwsFormatException);
