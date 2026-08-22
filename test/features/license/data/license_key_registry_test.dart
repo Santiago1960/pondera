@@ -10,8 +10,21 @@ void main() {
       allowDevelopmentKeys: false,
     );
 
+    expect(registry.find(LicenseKeyIds.bitgenialProduction2026_01), isNotNull);
     expect(registry.find(LicenseKeyIds.production2026_01), isNotNull);
     expect(registry.find(LicenseKeyIds.development), isNull);
+  });
+
+  test('incorpora la clave pública genérica de Bitgenial', () {
+    final registry = LicenseKeyRegistry.forEnvironment(
+      allowDevelopmentKeys: false,
+    );
+    final publicKey = registry.find(LicenseKeyIds.bitgenialProduction2026_01);
+
+    expect(
+      publicKey?.bytes,
+      base64Url.decode('jklUe9EP7y_9YXiLVXH0hV-KfGeIba6R8iR7AHOLWC8='),
+    );
   });
 
   test('la clave pública incorporada coincide con el archivo generado', () {
@@ -31,6 +44,7 @@ void main() {
       allowDevelopmentKeys: true,
     );
 
+    expect(registry.find(LicenseKeyIds.bitgenialProduction2026_01), isNotNull);
     expect(registry.find(LicenseKeyIds.production2026_01), isNotNull);
     expect(registry.find(LicenseKeyIds.development), isNotNull);
   });

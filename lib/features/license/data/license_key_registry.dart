@@ -19,6 +19,12 @@ class LicenseKeyRegistry {
     required bool allowDevelopmentKeys,
   }) {
     return LicenseKeyRegistry({
+      LicenseKeyIds.bitgenialProduction2026_01: SimplePublicKey(
+        LicenseSerialization.decodeBase64Url(
+          'jklUe9EP7y_9YXiLVXH0hV-KfGeIba6R8iR7AHOLWC8',
+        ),
+        type: KeyPairType.ed25519,
+      ),
       LicenseKeyIds.production2026_01: SimplePublicKey(
         LicenseSerialization.decodeBase64Url(
           'WJLgFwl9soxXNqz_LognhbUPIeIl6PkJMrQ8BjuY3Xg',
