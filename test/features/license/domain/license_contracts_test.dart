@@ -13,6 +13,7 @@ void main() {
       product: 'pondera',
       platform: 'windows',
       appVersion: '1.0.0',
+      deviceFingerprintHash: 'sha256:${'a' * 64}',
       customerName: 'SIGMA ALIMENTOS',
       siteName: 'Planta de embutidos',
       city: 'Cuenca',
@@ -25,6 +26,7 @@ void main() {
 
     expect(decoded.requestId, request.requestId);
     expect(decoded.installationId, request.installationId);
+    expect(decoded.deviceFingerprintHash, 'sha256:${'a' * 64}');
     expect(decoded.customerName, 'SIGMA ALIMENTOS');
     expect(decoded.siteName, 'Planta de embutidos');
     expect(decoded.city, 'Cuenca');

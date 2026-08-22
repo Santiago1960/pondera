@@ -21,9 +21,19 @@ class OfflineLicenseIssuer {
     required int graceDays,
     DateTime? issuedAt,
   }) async {
-    final normalizedLicenseId = _requiredValue(licenseId, 'licenseId');
-    final normalizedCustomerId = _requiredValue(customerId, 'customerId');
-    final normalizedSiteId = _requiredValue(siteId, 'siteId');
+    final normalizedLicenseId = _requiredIdentifier(
+      licenseId,
+      'licenseId',
+      'LIC',
+    );
+    final normalizedCustomerId = _requiredIdentifier(
+      customerId,
+      'customerId',
+      'CUS',
+    );
+    final normalizedSiteId = _requiredIdentifier(siteId, 'siteId', 'SITE');
+    _requiredIdentifier(request.requestId, 'requestId', 'REQ');
+    _requiredIdentifier(request.installationId, 'installationId', 'INSTALL');
     if (graceDays < 0) {
       throw ArgumentError('Los días de gracia no pueden ser negativos.');
     }
@@ -74,3 +84,16 @@ String _requiredValue(String value, String fieldName) {
   }
   return normalized;
 }
+
+String _requiredIdentifier(String value, String fieldName, String prefix) {
+  final normalized = _requiredValue(value, fieldName);
+  if (!RegExp('^$prefix-$_uuidV4\$').hasMatch(normalized)) {
+    throw ArgumentError(
+      'El campo $fieldName no tiene un identificador válido.',
+    );
+  }
+  return normalized;
+}
+
+const _uuidV4 =
+    r'[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}';

@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:pondera/features/license/domain/license_activation_request.dart';
 
 import 'src/license_signing_key.dart';
 import 'src/license_output_path.dart';
+import 'src/license_registration_document.dart';
 import 'src/offline_license_issuer.dart';
 import 'src/utc_instant_parser.dart';
 
@@ -44,7 +46,16 @@ Future<void> main(List<String> arguments) async {
     final outputPath =
         options.outputPath ?? defaultLicenseOutputPath(requestFile.path);
     await File(outputPath).writeAsString(license.encode(), flush: true);
+    final registrationPath = '$outputPath.registration.json';
+    final registrationDocument = await buildLicenseRegistrationDocument(
+      license,
+      replacesLicenseId: options.replacesLicenseId,
+    );
+    await File(
+      registrationPath,
+    ).writeAsString(jsonEncode(registrationDocument), flush: true);
     stdout.writeln('Licencia creada: $outputPath');
+    stdout.writeln('Registro para backend: $registrationPath');
   } on _UsageException catch (error) {
     stderr.writeln(error.message);
     stderr.writeln(_usage);
@@ -72,6 +83,7 @@ class _IssueOptions {
     required this.graceDays,
     required this.confirmed,
     this.outputPath,
+    this.replacesLicenseId,
   });
 
   final String requestPath;
@@ -83,6 +95,7 @@ class _IssueOptions {
   final int graceDays;
   final bool confirmed;
   final String? outputPath;
+  final String? replacesLicenseId;
 
   factory _IssueOptions.parse(List<String> arguments) {
     if (arguments.isEmpty || arguments.contains('--help')) {
@@ -133,6 +146,7 @@ class _IssueOptions {
       graceDays: graceDays,
       confirmed: confirmed,
       outputPath: values['--output']?.trim(),
+      replacesLicenseId: values['--replaces-license-id']?.trim(),
     );
   }
 }
@@ -149,10 +163,11 @@ Uso:
     --request <solicitud.pondera-request> \\
     --key <clave.pondera-private-key> \\
     --license-id <LIC-...> \\
-    --customer-id <CLI-...> \\
+    --customer-id <CUS-...> \\
     --site-id <SITE-...> \\
     --expires-at <YYYY-MM-DDTHH:MM:SSZ> \\
     [--grace-days <días>] \\
     [--output <salida.pondera-license>] \\
+    [--replaces-license-id <LIC-...>] \\
     [--yes]
 ''';

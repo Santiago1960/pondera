@@ -89,7 +89,7 @@ class _MainScreenState extends State<MainScreen> {
   static const _recipeAccessV1Url = String.fromEnvironment(
     'PONDERA_RECIPE_ACCESS_URL',
     defaultValue:
-        'https://n8n.bitgenial.com/webhook/pondera-recipe-v1-test',
+        'https://n8n.bitgenial.com/webhook/bitgenial-licensing-recipe-access-v1-test',
   );
   String _expectedValue = '';
 
@@ -458,6 +458,7 @@ class _MainScreenState extends State<MainScreen> {
       final request = await activationRequestService.create(
         platform: Platform.operatingSystem,
         appVersion: appVersion,
+        deviceFingerprintHash: await const DeviceFingerprint().readHash(),
         customerName: formData.customerName,
         siteName: formData.siteName,
         city: formData.city,

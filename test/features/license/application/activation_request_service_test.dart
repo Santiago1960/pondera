@@ -43,6 +43,7 @@ void main() {
     final request = await service.create(
       platform: 'windows',
       appVersion: '1.0.0+10',
+      deviceFingerprintHash: 'sha256:${'a' * 64}',
       customerName: ' SIGMA ALIMENTOS ',
       siteName: ' Planta de embutidos ',
       city: ' Cuenca ',
@@ -51,9 +52,17 @@ void main() {
       now: DateTime.utc(2026, 6, 18),
     );
 
-    expect(request.requestId, matches(RegExp(r'^REQ-[0-9A-F]{8}$')));
+    expect(
+      request.requestId,
+      matches(
+        RegExp(
+          r'^REQ-[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$',
+        ),
+      ),
+    );
     expect(request.installationId, startsWith('INSTALL-'));
     expect(request.product, 'pondera');
+    expect(request.deviceFingerprintHash, 'sha256:${'a' * 64}');
     expect(request.customerName, 'SIGMA ALIMENTOS');
     expect(request.siteName, 'Planta de embutidos');
     expect(request.city, 'Cuenca');
@@ -70,6 +79,7 @@ void main() {
     final request = await service.create(
       platform: 'macos',
       appVersion: '1.0.0',
+      deviceFingerprintHash: 'sha256:${'b' * 64}',
       customerName: 'SIGMA ALIMENTOS',
       siteName: 'Planta de embutidos',
       city: 'Cuenca',

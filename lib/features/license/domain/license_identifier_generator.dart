@@ -10,13 +10,7 @@ class LicenseIdentifierGenerator {
 
   String createRecipeAccessRequestId() => 'RAC-${_uuid()}';
 
-  String createRequestId() {
-    final value = _bytes(4)
-        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-        .join()
-        .toUpperCase();
-    return 'REQ-$value';
-  }
+  String createRequestId() => 'REQ-${_uuid()}';
 
   String _uuid() {
     final bytes = _bytes(16);

@@ -9,6 +9,7 @@ class LicenseActivationRequest {
     required this.product,
     required this.platform,
     required this.appVersion,
+    required this.deviceFingerprintHash,
     required this.customerName,
     required this.siteName,
     required this.city,
@@ -24,6 +25,7 @@ class LicenseActivationRequest {
   final String product;
   final String platform;
   final String appVersion;
+  final String deviceFingerprintHash;
   final String customerName;
   final String siteName;
   final String city;
@@ -39,6 +41,7 @@ class LicenseActivationRequest {
       'product': product,
       'platform': platform,
       'app_version': appVersion,
+      'device_fingerprint_hash': deviceFingerprintHash,
       'customer_name': customerName,
       'site_name': siteName,
       'city': city,
@@ -68,6 +71,10 @@ class LicenseActivationRequest {
       product: LicenseSerialization.requiredString(decoded, 'product'),
       platform: LicenseSerialization.requiredString(decoded, 'platform'),
       appVersion: LicenseSerialization.requiredString(decoded, 'app_version'),
+      deviceFingerprintHash: LicenseSerialization.requiredString(
+        decoded,
+        'device_fingerprint_hash',
+      ),
       customerName: LicenseSerialization.requiredString(
         decoded,
         'customer_name',

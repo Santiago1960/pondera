@@ -15,6 +15,7 @@ class ActivationRequestService {
   Future<LicenseActivationRequest> create({
     required String platform,
     required String appVersion,
+    required String deviceFingerprintHash,
     required String customerName,
     required String siteName,
     required String city,
@@ -28,6 +29,7 @@ class ActivationRequestService {
       product: 'pondera',
       platform: platform,
       appVersion: appVersion,
+      deviceFingerprintHash: deviceFingerprintHash,
       customerName: customerName.trim(),
       siteName: siteName.trim(),
       city: city.trim(),
