@@ -11,7 +11,7 @@ Luego de esto la app debe mostrarse virgen en la PC
 
 # LICENCIAS
 ## Para generar una licencia, es importante lo siguiente:
-1. Recibir el archivo **.pondera-request** por parte del cliente
+1. Recibir el archivo **.bitgenial-request** por parte del cliente
 2. En la carpeta /santiago/Licencias-Pondera está el script que usaremos para la generación de una licencia (copiar)
 3. Reemplazar --request y --output con las direcciones correspondientes (generalmente en Descargas)
 4. **Verificar la fecha de vigencia y días de gracia**

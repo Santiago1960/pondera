@@ -18,7 +18,7 @@ Future<void> main(List<String> arguments) async {
   if (arguments.isEmpty || arguments.length > 2) {
     stderr.writeln(
       'Uso: dart run tool/create_dev_license.dart '
-      '<solicitud.pondera-request> [salida.pondera-license]',
+      '<solicitud.bitgenial-request> [salida.bitgenial-license]',
     );
     exitCode = 64;
     return;

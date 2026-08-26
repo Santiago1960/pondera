@@ -31,7 +31,7 @@ class ActivationRequestExporter {
       request.deviceLabel,
       request.requestId,
     ].map(_fileSafeComponent).where((value) => value.isNotEmpty);
-    return '${components.join('-')}.pondera-request';
+    return '${components.join('-')}.bitgenial-request';
   }
 }
 

@@ -160,14 +160,14 @@ class _UsageException implements Exception {
 const _usage = '''
 Uso:
   dart run tool/issue_license.dart \\
-    --request <solicitud.pondera-request> \\
+    --request <solicitud.bitgenial-request> \\
     --key <clave.pondera-private-key> \\
     --license-id <LIC-...> \\
     --customer-id <CUS-...> \\
     --site-id <SITE-...> \\
     --expires-at <YYYY-MM-DDTHH:MM:SSZ> \\
     [--grace-days <días>] \\
-    [--output <salida.pondera-license>] \\
+    [--output <salida.bitgenial-license>] \\
     [--replaces-license-id <LIC-...>] \\
     [--yes]
 ''';

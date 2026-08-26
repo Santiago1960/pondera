@@ -1,7 +1,7 @@
 String defaultLicenseOutputPath(String requestPath) {
-  const extension = '.pondera-request';
+  const extension = '.bitgenial-request';
   if (requestPath.endsWith(extension)) {
-    return '${requestPath.substring(0, requestPath.length - extension.length)}.pondera-license';
+    return '${requestPath.substring(0, requestPath.length - extension.length)}.bitgenial-license';
   }
-  return '$requestPath.pondera-license';
+  return '$requestPath.bitgenial-license';
 }

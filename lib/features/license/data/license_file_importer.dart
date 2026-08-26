@@ -6,7 +6,7 @@ class LicenseFileImporter {
   Future<String?> selectAndRead() async {
     const typeGroup = XTypeGroup(
       label: 'Licencia Pondera',
-      extensions: ['pondera-license'],
+      extensions: ['bitgenial-license', 'pondera-license'],
     );
     final file = await openFile(acceptedTypeGroups: [typeGroup]);
     return file?.readAsString();

@@ -91,7 +91,7 @@ void main() {
 
     expect(
       fileName,
-      'SIGMA-ALIMENTOS-Cuenca-PC-Produccion-01-${request.requestId}.pondera-request',
+      'SIGMA-ALIMENTOS-Cuenca-PC-Produccion-01-${request.requestId}.bitgenial-request',
     );
   });
 }
