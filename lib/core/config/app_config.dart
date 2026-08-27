@@ -2,6 +2,7 @@ class AppConfig {
   const AppConfig._();
 
   static const n8nRequestTimeout = Duration(seconds: 45);
+  static const licenseStatusRequestTimeout = Duration(seconds: 5);
   static const maxScaleAccumulatorCharacters = 8192;
   static const manualPrintQuietPeriod = Duration(milliseconds: 100);
   static const continuousFrameQuietPeriod = Duration(milliseconds: 30);

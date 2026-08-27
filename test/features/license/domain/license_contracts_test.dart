@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pondera/features/license/domain/license_activation_request.dart';
 import 'package:pondera/features/license/domain/license_payload.dart';
+import 'package:pondera/features/license/domain/license_status_request.dart';
 import 'package:pondera/features/license/domain/signed_license.dart';
 
 void main() {
@@ -98,6 +99,26 @@ void main() {
       () => LicenseActivationRequest.decode(source),
       throwsFormatException,
     );
+  });
+
+  test('serializa una consulta oportunista sin datos de receta', () {
+    final request = LicenseStatusRequest(
+      requestId: 'RAC-1',
+      installationId: 'INSTALL-1',
+      deviceFingerprintHash: 'sha256:${'a' * 64}',
+      platform: 'macos',
+      appVersion: '1.0.0+10',
+      createdAt: DateTime.utc(2026, 8, 26, 15),
+      licenseId: 'LIC-1',
+      licenseFileSha256: 'sha256:${'b' * 64}',
+    );
+
+    final json = jsonDecode(request.encode()) as Map<String, dynamic>;
+
+    expect(json['product'], 'pondera');
+    expect(json['license_id'], 'LIC-1');
+    expect(json.containsKey('trama'), isFalse);
+    expect(json.containsKey('valor_esperado'), isFalse);
   });
 }
 

@@ -27,10 +27,12 @@ import '../../license/data/device_fingerprint.dart';
 import '../../license/data/installation_identity_repository.dart';
 import '../../license/data/license_file_importer.dart';
 import '../../license/data/license_key_registry.dart';
+import '../../license/data/license_status_verifier.dart';
 import '../../license/data/license_verifier.dart';
 import '../../license/data/offline_license_repository.dart';
 import '../../license/domain/demo_license.dart';
 import '../../license/domain/license_identifier_generator.dart';
+import '../../license/domain/license_status_request.dart';
 import '../../license/domain/license_verification_result.dart';
 import '../../license/presentation/activation_request_dialog.dart';
 import '../../license/presentation/license_status_panel.dart';
@@ -91,6 +93,10 @@ class _MainScreenState extends State<MainScreen> {
     defaultValue:
         'https://n8n.bitgenial.com/webhook/bitgenial-licensing-recipe-access-v1-test',
   );
+  static const _licenseStatusUrl = String.fromEnvironment(
+    'PONDERA_LICENSE_STATUS_URL',
+    defaultValue: 'https://licensing.bitgenial.com/api/license-status',
+  );
   String _expectedValue = '';
 
   Socket? _socket;
@@ -125,6 +131,8 @@ class _MainScreenState extends State<MainScreen> {
   int _bytesReceived = 0;
   int _serialIgnoredBytes = 0;
   bool _isSendingToN8n = false;
+  bool _isCheckingLicenseStatus = false;
+  DateTime? _nextLicenseStatusCheckAt;
   bool _isDemoExpired = false;
   String _demoStatusMessage = '';
   String _installationId = '';
@@ -237,10 +245,12 @@ class _MainScreenState extends State<MainScreen> {
         : '${packageInfo.version}+${packageInfo.buildNumber}';
     _activationRequestService = ActivationRequestService(identityRepository);
     _offlineLicenseRepository = await OfflineLicenseRepository.create();
+    final licenseKeyRegistry = LicenseKeyRegistry.forCurrentBuild();
     _offlineLicenseController = OfflineLicenseController(
       identityRepository,
       _offlineLicenseRepository,
-      LicenseVerifier(LicenseKeyRegistry.forCurrentBuild()),
+      LicenseVerifier(licenseKeyRegistry),
+      LicenseStatusVerifier(licenseKeyRegistry),
     );
     _demoLicenseController = DemoLicenseController(_settingsRepository);
     final offlineLicense = await _offlineLicenseController!.validateStored();
@@ -317,7 +327,7 @@ class _MainScreenState extends State<MainScreen> {
         _cleanWeightDisplay =
             offlineLicense.status == LicenseVerificationStatus.missing
             ? 'Demo vencida'
-            : 'Licencia inválida';
+            : _unusableLicenseWeightDisplay(offlineLicense.status);
         _uiStatusMessage = _demoStatusMessage;
       } else if (_savedRegex.isNotEmpty) {
         _cleanWeightDisplay = '---';
@@ -341,10 +351,11 @@ class _MainScreenState extends State<MainScreen> {
       unawaited(_showOperatorAlert(message: _uiStatusMessage));
     }
     _demoTimer?.cancel();
-    _demoTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) => _checkLicenseDuringRuntime(),
-    );
+    _demoTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      unawaited(_checkLicenseDuringRuntime());
+      unawaited(_checkLicenseStatusOnline());
+    });
+    unawaited(_checkLicenseStatusOnline());
   }
 
   Future<void> _checkLicenseDuringRuntime() async {
@@ -371,14 +382,14 @@ class _MainScreenState extends State<MainScreen> {
         if (_isDemoExpired) {
           _savedRegex = '';
           _expectedValue = '';
-          _cleanWeightDisplay =
-              updatedLicense.status == LicenseVerificationStatus.expired
-              ? 'Licencia vencida'
-              : 'Licencia inválida';
+          _cleanWeightDisplay = _unusableLicenseWeightDisplay(
+            updatedLicense.status,
+          );
           _uiStatusMessage = updatedLicense.message;
           _networkDiagnostics =
               'La licencia está bloqueada. No se abrirá conexión.';
         } else if (_cleanWeightDisplay == 'Licencia vencida' ||
+            _cleanWeightDisplay == 'Licencia bloqueada' ||
             _cleanWeightDisplay == 'Licencia inválida') {
           _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
           if (!_isConnected) {
@@ -526,6 +537,8 @@ class _MainScreenState extends State<MainScreen> {
           ),
         ),
       );
+      _nextLicenseStatusCheckAt = null;
+      unawaited(_checkLicenseStatusOnline());
     } catch (error) {
       if (!mounted) {
         return;
@@ -1015,6 +1028,87 @@ class _MainScreenState extends State<MainScreen> {
     return (response: response, requestId: requestId);
   }
 
+  Future<void> _checkLicenseStatusOnline() async {
+    final controller = _offlineLicenseController;
+    final licensePayload = _offlineLicenseResult?.payload;
+    final now = DateTime.now().toUtc();
+    if (_licenseStatusUrl.isEmpty ||
+        controller == null ||
+        licensePayload == null ||
+        _isCheckingLicenseStatus ||
+        (_nextLicenseStatusCheckAt?.isAfter(now) ?? false)) {
+      return;
+    }
+
+    _isCheckingLicenseStatus = true;
+    _nextLicenseStatusCheckAt = now.add(const Duration(minutes: 15));
+    try {
+      final licenseFileSha256 = await _offlineLicenseRepository.loadSha256();
+      if (licenseFileSha256 == null) return;
+      final requestId = LicenseIdentifierGenerator()
+          .createRecipeAccessRequestId();
+      final request = LicenseStatusRequest(
+        requestId: requestId,
+        installationId: _installationId,
+        deviceFingerprintHash: await const DeviceFingerprint().readHash(),
+        platform: Platform.operatingSystem,
+        appVersion: _appVersion,
+        createdAt: now,
+        licenseId: licensePayload.licenseId,
+        licenseFileSha256: licenseFileSha256,
+      );
+      final response = await http
+          .post(
+            Uri.parse(_licenseStatusUrl),
+            headers: const {'Content-Type': 'application/json'},
+            body: request.encode(),
+          )
+          .timeout(AppConfig.licenseStatusRequestTimeout);
+      if (response.statusCode != 200 && response.statusCode != 403) return;
+
+      final result = await controller.acceptRemoteStatus(
+        response.body,
+        expectedRequestId: requestId,
+      );
+      _nextLicenseStatusCheckAt = now.add(const Duration(hours: 24));
+      final blocked =
+          result.status == LicenseVerificationStatus.revoked ||
+          result.status == LicenseVerificationStatus.blocked;
+      if (blocked) {
+        await _clearRecipeStorage();
+        _disconnect();
+      }
+      if (!mounted) return;
+      setState(() {
+        _offlineLicenseResult = result;
+        _demoLicense = null;
+        _isDemoExpired = !result.isUsable;
+        _demoStatusMessage = result.message;
+        if (blocked) {
+          _savedRegex = '';
+          _expectedValue = '';
+          _cleanWeightDisplay = 'Licencia bloqueada';
+          _uiStatusMessage = result.message;
+          _networkDiagnostics =
+              'El servidor confirmó un bloqueo definitivo de la licencia.';
+        } else if (result.isUsable) {
+          _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
+          _uiStatusMessage = 'Licencia vigente verificada con el servidor.';
+        }
+      });
+    } on FormatException catch (error) {
+      debugPrint('Estado remoto de licencia inválido: $error');
+    } on TimeoutException {
+      debugPrint('La consulta de licencia agotó el tiempo de espera.');
+    } on SocketException catch (error) {
+      debugPrint('No se pudo consultar la licencia: $error');
+    } catch (error) {
+      debugPrint('Error al consultar la licencia: $error');
+    } finally {
+      _isCheckingLicenseStatus = false;
+    }
+  }
+
   Future<void> _handleRecipeAccessResponse({
     required http.Response httpResponse,
     required String requestId,
@@ -1333,8 +1427,19 @@ class _MainScreenState extends State<MainScreen> {
     required DemoLicense? demoLicense,
   }) {
     return offlineLicense.status == LicenseVerificationStatus.expired ||
+        offlineLicense.status == LicenseVerificationStatus.revoked ||
+        offlineLicense.status == LicenseVerificationStatus.blocked ||
         (offlineLicense.status == LicenseVerificationStatus.missing &&
             (demoLicense?.isExpired ?? false));
+  }
+
+  String _unusableLicenseWeightDisplay(LicenseVerificationStatus status) {
+    return switch (status) {
+      LicenseVerificationStatus.expired => 'Licencia vencida',
+      LicenseVerificationStatus.revoked ||
+      LicenseVerificationStatus.blocked => 'Licencia bloqueada',
+      _ => 'Licencia inválida',
+    };
   }
 
   Future<void> _clearRecipeStorage() async {

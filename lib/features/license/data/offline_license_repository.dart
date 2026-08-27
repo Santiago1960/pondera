@@ -85,6 +85,13 @@ class OfflineLicenseRepository {
     );
   }
 
+  String? loadSignedStatus() =>
+      _preferences.getString(PreferenceKeys.signedLicenseStatus);
+
+  Future<void> saveSignedStatus(String value) async {
+    await _preferences.setString(PreferenceKeys.signedLicenseStatus, value);
+  }
+
   Future<void> clear() async {
     await _fileStore.delete();
     await _preferences.remove(PreferenceKeys.signedLicense);

@@ -12,6 +12,8 @@ enum LicenseVerificationStatus {
   notYetValid,
   expired,
   clockTampered,
+  revoked,
+  blocked,
 }
 
 class LicenseVerificationResult {

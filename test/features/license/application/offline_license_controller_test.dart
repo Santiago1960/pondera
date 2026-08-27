@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pondera/core/constants/preference_keys.dart';
 import 'package:pondera/features/license/application/offline_license_controller.dart';
 import 'package:pondera/features/license/data/installation_identity_repository.dart';
 import 'package:pondera/features/license/data/license_key_registry.dart';
+import 'package:pondera/features/license/data/license_status_verifier.dart';
 import 'package:pondera/features/license/data/offline_license_file_store.dart';
 import 'package:pondera/features/license/data/license_verifier.dart';
 import 'package:pondera/features/license/data/offline_license_repository.dart';
@@ -232,6 +235,58 @@ void main() {
       expect(rolledBack.status, LicenseVerificationStatus.clockTampered);
     },
   );
+
+  test(
+    'persiste una revocación firmada y rechaza respuestas anteriores',
+    () async {
+      final preferences = await SharedPreferences.getInstance();
+      final controller = _buildController(preferences, 'INSTALL-TEST');
+      final license = await _signedLicense(
+        installationId: 'INSTALL-TEST',
+        expiresAt: DateTime.utc(2027),
+      );
+      await controller.import(license.encode(), now: DateTime.utc(2026, 8, 26));
+      const requestId = 'RAC-00000000-0000-4000-8000-000000000001';
+
+      final revoked = await _signedStatus(
+        requestId: requestId,
+        installationId: 'INSTALL-TEST',
+        licenseId: 'LIC-TEST',
+        decision: 'deny',
+        accessStatus: 'revoked',
+        reasonCode: 'license_revoked',
+        serverTime: DateTime.utc(2026, 8, 26, 15),
+      );
+      final blocked = await controller.acceptRemoteStatus(
+        revoked.encode(),
+        expectedRequestId: requestId,
+        now: DateTime.utc(2026, 8, 26),
+      );
+      final reloaded = await controller.validateStored(
+        now: DateTime.utc(2026, 8, 26),
+      );
+
+      expect(blocked.status, LicenseVerificationStatus.revoked);
+      expect(reloaded.status, LicenseVerificationStatus.revoked);
+
+      final olderAllow = await _signedStatus(
+        requestId: requestId,
+        installationId: 'INSTALL-TEST',
+        licenseId: 'LIC-TEST',
+        decision: 'allow',
+        accessStatus: 'licensed',
+        reasonCode: 'license_valid',
+        serverTime: DateTime.utc(2026, 8, 26, 14),
+      );
+      final stillBlocked = await controller.acceptRemoteStatus(
+        olderAllow.encode(),
+        expectedRequestId: requestId,
+        now: DateTime.utc(2026, 8, 26),
+      );
+
+      expect(stillBlocked.status, LicenseVerificationStatus.revoked);
+    },
+  );
 }
 
 OfflineLicenseController _buildController(
@@ -242,6 +297,7 @@ OfflineLicenseController _buildController(
     InstallationIdentityRepository(_FixedInstallationStore(installationId)),
     OfflineLicenseRepository(_MemoryLicenseFileStore(), preferences),
     LicenseVerifier(LicenseKeyRegistry.forCurrentBuild()),
+    LicenseStatusVerifier(LicenseKeyRegistry.forCurrentBuild()),
   );
 }
 
@@ -290,6 +346,40 @@ Future<SignedLicense> _signedLicense({
     LicenseSerialization.decodeHex(_seedHex),
   );
   final payloadBytes = payload.encode();
+  final signature = await algorithm.sign(payloadBytes, keyPair: keyPair);
+  return SignedLicense.fromBytes(
+    keyId: LicenseKeyIds.development,
+    payloadBytes: payloadBytes,
+    signatureBytes: signature.bytes,
+  );
+}
+
+Future<SignedLicense> _signedStatus({
+  required String requestId,
+  required String installationId,
+  required String licenseId,
+  required String decision,
+  required String accessStatus,
+  required String reasonCode,
+  required DateTime serverTime,
+}) async {
+  final payloadBytes = utf8.encode(
+    jsonEncode({
+      'schema_version': 1,
+      'request_id': requestId,
+      'product': 'pondera',
+      'installation_id': installationId,
+      'license_id': licenseId,
+      'decision': decision,
+      'access_status': accessStatus,
+      'reason_code': reasonCode,
+      'server_time': serverTime.toIso8601String(),
+    }),
+  );
+  final algorithm = Ed25519();
+  final keyPair = await algorithm.newKeyPairFromSeed(
+    LicenseSerialization.decodeHex(_seedHex),
+  );
   final signature = await algorithm.sign(payloadBytes, keyPair: keyPair);
   return SignedLicense.fromBytes(
     keyId: LicenseKeyIds.development,

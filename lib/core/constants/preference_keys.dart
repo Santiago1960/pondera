@@ -35,4 +35,5 @@ class PreferenceKeys {
   static const signedLicense = 'pondera_signed_license';
   static const offlineLicenseLastValidation =
       'pondera_offline_license_last_validation';
+  static const signedLicenseStatus = 'pondera_signed_license_status';
 }
