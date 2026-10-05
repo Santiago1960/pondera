@@ -35,10 +35,12 @@ import '../../license/domain/license_identifier_generator.dart';
 import '../../license/domain/license_status_request.dart';
 import '../../license/domain/license_verification_result.dart';
 import '../../license/presentation/activation_request_dialog.dart';
+import '../../license/presentation/license_import_feedback_dialog.dart';
 import '../../license/presentation/license_status_panel.dart';
 import '../../recipe/domain/recipe_access_request.dart';
 import '../../recipe/domain/recipe_access_response.dart';
 import '../../recipe/domain/recipe_transport_policy.dart';
+import '../../recipe/domain/recipe_validator.dart';
 import '../../recipe/presentation/recipe_actions_panel.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_frame_splitter.dart';
@@ -47,6 +49,8 @@ import '../domain/serial_frame_decoder.dart';
 import '../domain/weight_capture_controller.dart';
 import '../domain/weight_converter.dart';
 import '../domain/weight_unit.dart';
+import '../domain/tare_weight.dart';
+import 'tare_dialog.dart';
 import 'current_weight_panel.dart';
 import 'raw_data_log_panel.dart';
 import 'units_settings_panel.dart';
@@ -122,7 +126,41 @@ class _MainScreenState extends State<MainScreen> {
 
   String _savedRegex = '';
   String _cleanWeightDisplay = '---';
+  TareWeight _tare = const TareWeight();
+  bool _isEditingTare = false;
+  String? _grossWeightDisplay;
+  String? _netWeightDisplay;
+  WeightUnit _readingOutputUnit = WeightUnit.kilogram;
+
+  void _applyTare(TareWeight tare) {
+    if (_isTyping) return;
+    setState(() {
+      _tare = tare;
+      _grossWeightDisplay = null;
+      _netWeightDisplay = null;
+      if (!_isDemoExpired && !_isStartupLicenseCheckPending && _savedRegex.isNotEmpty) {
+        _cleanWeightDisplay = '---';
+      }
+      // Preserve the gross-zero gate, but discard the old capture text.
+      _weightCaptureController.clearReading();
+    });
+  }
+
+  Future<void> _editTare() async {
+    if (_isTyping || _isEditingTare) return;
+    setState(() => _isEditingTare = true);
+    _weightCaptureController.clearReading();
+    try {
+      final tare = await showTareDialog(context, _tare);
+      if (mounted && tare != null) _applyTare(tare);
+    } finally {
+      _weightCaptureController.clearReading();
+      if (mounted) setState(() => _isEditingTare = false);
+    }
+  }
   String _uiStatusMessage = 'Desconectado';
+  String? _recipeStatusMessage;
+  bool _recipeStatusIsError = false;
   String _networkAccumulator = '';
   final ReadingFrameAssembler _continuousFrameAssembler =
       ReadingFrameAssembler();
@@ -132,6 +170,7 @@ class _MainScreenState extends State<MainScreen> {
   int _serialIgnoredBytes = 0;
   bool _isSendingToN8n = false;
   bool _isCheckingLicenseStatus = false;
+  bool _isStartupLicenseCheckPending = true;
   DateTime? _nextLicenseStatusCheckAt;
   bool _isDemoExpired = false;
   String _demoStatusMessage = '';
@@ -351,11 +390,17 @@ class _MainScreenState extends State<MainScreen> {
       unawaited(_showOperatorAlert(message: _uiStatusMessage));
     }
     _demoTimer?.cancel();
+    await _checkLicenseStatusOnline();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isStartupLicenseCheckPending = false;
+    });
     _demoTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       unawaited(_checkLicenseDuringRuntime());
       unawaited(_checkLicenseStatusOnline());
     });
-    unawaited(_checkLicenseStatusOnline());
   }
 
   Future<void> _checkLicenseDuringRuntime() async {
@@ -498,6 +543,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _importOfflineLicense() async {
+    final previousLicenseWasUsable = _offlineLicenseResult?.isUsable ?? false;
     try {
       final encodedLicense = await _licenseFileImporter.selectAndRead();
       if (encodedLicense == null || !mounted) {
@@ -513,9 +559,12 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
       if (!result.isUsable) {
-        ScaffoldMessenger.of(
+        await showLicenseImportFeedbackDialog(
           context,
-        ).showSnackBar(SnackBar(content: Text(result.message)));
+          installed: false,
+          message: result.message,
+          previousLicensePreserved: previousLicenseWasUsable,
+        );
         return;
       }
 
@@ -529,22 +578,27 @@ class _MainScreenState extends State<MainScreen> {
         _networkDiagnostics =
             'Licencia ${result.payload!.licenseId} verificada correctamente.';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Licencia activada para ${result.payload!.customerName} · '
-            '${result.payload!.deviceLabel}.',
-          ),
-        ),
+      await showLicenseImportFeedbackDialog(
+        context,
+        installed: true,
+        message: result.message,
+        payload: result.payload,
       );
-      _nextLicenseStatusCheckAt = null;
-      unawaited(_checkLicenseStatusOnline());
-    } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo importar la licencia: $error')),
+      _nextLicenseStatusCheckAt = null;
+      unawaited(_checkLicenseStatusOnline());
+    } catch (error) {
+      debugPrint('No se pudo importar la licencia: $error');
+      if (!mounted) {
+        return;
+      }
+      await showLicenseImportFeedbackDialog(
+        context,
+        installed: false,
+        message: 'No se pudo leer o validar el archivo seleccionado.',
+        previousLicensePreserved: previousLicenseWasUsable,
       );
     }
   }
@@ -826,7 +880,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _handleF12Pressed() async {
-    if (_isTyping || _isDemoExpired) {
+    if (_isTyping || _isDemoExpired || _isEditingTare) {
       return;
     }
     await _applyWeightCaptureDecision(_weightCaptureController.onF12Pressed());
@@ -838,6 +892,13 @@ class _MainScreenState extends State<MainScreen> {
     String? zeroDisplayText,
   }) async {
     final capturedDisplay = displayText ?? decision.reading?.captureText;
+    if (_isEditingTare) return;
+    if (decision.outcome == WeightCaptureOutcome.netWeightRejected) {
+      _uiStatusMessage = 'Peso neto menor o igual a cero. Revise la tara. No se registró.';
+      _captureStatusIsError = true;
+      _scheduleTelemetryRefresh();
+      return;
+    }
 
     if (decision.outcome == WeightCaptureOutcome.zeroRejected) {
       if (zeroDisplayText != null || capturedDisplay != null) {
@@ -1071,10 +1132,8 @@ class _MainScreenState extends State<MainScreen> {
         expectedRequestId: requestId,
       );
       _nextLicenseStatusCheckAt = now.add(const Duration(hours: 24));
-      final blocked =
-          result.status == LicenseVerificationStatus.revoked ||
-          result.status == LicenseVerificationStatus.blocked;
-      if (blocked) {
+      final accessDenied = !result.isUsable;
+      if (accessDenied) {
         await _clearRecipeStorage();
         _disconnect();
       }
@@ -1084,13 +1143,13 @@ class _MainScreenState extends State<MainScreen> {
         _demoLicense = null;
         _isDemoExpired = !result.isUsable;
         _demoStatusMessage = result.message;
-        if (blocked) {
+        if (accessDenied) {
           _savedRegex = '';
           _expectedValue = '';
-          _cleanWeightDisplay = 'Licencia bloqueada';
+          _cleanWeightDisplay = _unusableLicenseWeightDisplay(result.status);
           _uiStatusMessage = result.message;
           _networkDiagnostics =
-              'El servidor confirmó un bloqueo definitivo de la licencia.';
+              'El servidor confirmó que la licencia no autoriza la operación.';
         } else if (result.isUsable) {
           _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
           _uiStatusMessage = 'Licencia vigente verificada con el servidor.';
@@ -1113,6 +1172,7 @@ class _MainScreenState extends State<MainScreen> {
     required http.Response httpResponse,
     required String requestId,
     required String expectedValue,
+    required String rawData,
   }) async {
     try {
       final response = RecipeAccessResponse.decode(
@@ -1136,7 +1196,15 @@ class _MainScreenState extends State<MainScreen> {
           ? response.regexPattern!
           : null;
       if (newRegex != null) {
-        RegExp(newRegex);
+        final validationError = RecipeValidator.validate(
+          pattern: newRegex,
+          frame: rawData,
+          expectedValue: expectedValue,
+        );
+        if (validationError != null) {
+          _showRecipeError(validationError);
+          return;
+        }
       }
       await _settingsRepository.saveRecipeAccessDates(
         trialStartedAt: response.trialStartedAt,
@@ -1154,6 +1222,8 @@ class _MainScreenState extends State<MainScreen> {
             _savedRegex = newRegex;
             _expectedValue = expectedValue;
             _uiStatusMessage = response.message;
+            _recipeStatusMessage = response.message;
+            _recipeStatusIsError = false;
           });
         }
         return;
@@ -1166,28 +1236,21 @@ class _MainScreenState extends State<MainScreen> {
             _savedRegex = '';
             _expectedValue = '';
             _cleanWeightDisplay = 'Sin receta';
-            _uiStatusMessage = response.message;
           });
+          _showRecipeError(response.message);
         }
         return;
       }
 
       if (mounted) {
-        setState(() {
-          _uiStatusMessage =
-              isRecipeServiceUnavailableStatus(httpResponse.statusCode)
-              ? recipeServiceUnavailableMessage
-              : response.message;
-        });
+        _showRecipeError(response.message);
       }
     } on FormatException catch (error) {
       debugPrint('Respuesta recipe_access inválida: $error');
-      if (mounted) {
-        setState(() {
-          _uiStatusMessage =
-              'Respuesta de autorización inválida. La receta actual no fue modificada.';
-        });
-      }
+      _showRecipeError(
+        'El servicio de recetas devolvió una respuesta inválida. '
+        'La receta actual no fue modificada.',
+      );
     }
   }
 
@@ -1286,6 +1349,12 @@ class _MainScreenState extends State<MainScreen> {
     if (_isSendingToN8n) {
       return;
     }
+    if (_isStartupLicenseCheckPending) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Validando la licencia con el servidor.')),
+      );
+      return;
+    }
     if (_isDemoExpired) {
       ScaffoldMessenger.of(
         context,
@@ -1312,6 +1381,8 @@ class _MainScreenState extends State<MainScreen> {
       setState(() {
         _isSendingToN8n = true;
         _uiStatusMessage = 'Enviando muestra a n8n...';
+        _recipeStatusMessage = null;
+        _recipeStatusIsError = false;
       });
     }
 
@@ -1323,6 +1394,7 @@ class _MainScreenState extends State<MainScreen> {
           httpResponse: response,
           requestId: requestId,
           expectedValue: expectedValue,
+          rawData: rawData,
         );
         return;
       }
@@ -1332,34 +1404,23 @@ class _MainScreenState extends State<MainScreen> {
         try {
           responseData = jsonDecode(response.body);
         } catch (e) {
-          if (mounted) {
-            setState(() {
-              _uiStatusMessage =
-                  'n8n respondió 200, pero no envió JSON válido.';
-            });
-          }
+          _showRecipeError('n8n respondió 200, pero no envió JSON válido.');
           return;
         }
         if (responseData is! Map<String, dynamic>) {
-          if (mounted) {
-            setState(() {
-              _uiStatusMessage =
-                  'n8n respondió 200, pero el JSON no es un objeto.';
-            });
-          }
+          _showRecipeError('n8n respondió 200, pero el JSON no es un objeto.');
           return;
         }
         final regexValue = responseData['regex_pattern'];
         final newRegex = regexValue is String ? regexValue.trim() : '';
         if (newRegex.isNotEmpty) {
-          try {
-            RegExp(newRegex);
-          } on FormatException {
-            if (mounted) {
-              setState(() {
-                _uiStatusMessage = 'n8n devolvió una receta Regex inválida.';
-              });
-            }
+          final validationError = RecipeValidator.validate(
+            pattern: newRegex,
+            frame: rawData,
+            expectedValue: expectedValue,
+          );
+          if (validationError != null) {
+            _showRecipeError(validationError);
             return;
           }
 
@@ -1372,37 +1433,65 @@ class _MainScreenState extends State<MainScreen> {
               _savedRegex = newRegex;
               _expectedValue = expectedValue;
               _uiStatusMessage = '¡Receta Regex guardada con éxito!';
+              _recipeStatusMessage = _uiStatusMessage;
+              _recipeStatusIsError = false;
             });
           }
-        } else if (mounted) {
-          setState(() {
-            _uiStatusMessage =
-                'n8n respondió 200, pero no devolvió regex_pattern.';
-          });
+        } else {
+          _showRecipeError(
+            'n8n respondió 200, pero no devolvió regex_pattern.',
+          );
         }
-      } else if (isRecipeServiceUnavailableStatus(response.statusCode) &&
-          mounted) {
-        setState(() {
-          _uiStatusMessage = recipeServiceUnavailableMessage;
-        });
-      } else if (mounted) {
-        setState(() {
-          _uiStatusMessage = 'n8n respondió HTTP ${response.statusCode}.';
-        });
+      } else if (isRecipeServiceUnavailableStatus(response.statusCode)) {
+        _showRecipeError(recipeServiceUnavailableMessage);
+      } else {
+        _showRecipeError(
+          'El servicio de recetas rechazó la solicitud '
+          '(HTTP ${response.statusCode}). '
+          'Inténtalo nuevamente o contacta a soporte.',
+        );
       }
     } on TimeoutException {
-      if (mounted) {
-        setState(() {
-          _uiStatusMessage = recipeServiceUnavailableMessage;
-        });
-      }
+      _showRecipeError(
+        'n8n no respondió en ${AppConfig.n8nRequestTimeout.inSeconds} segundos. '
+        'Verifica la conexión a Internet e inténtalo nuevamente. '
+        'La receta actual no fue modificada.',
+      );
+    } on HandshakeException catch (error) {
+      debugPrint('Error TLS al conectar con n8n: $error');
+      _showRecipeConnectionError(
+        'No se pudo establecer una conexión segura con n8n. '
+        'Verifica la fecha del equipo, certificados o inspección HTTPS del firewall.',
+      );
+    } on SocketException catch (error) {
+      debugPrint('Error de red al conectar con n8n: $error');
+      _showRecipeConnectionError(
+        'No se pudo conectar con n8n. '
+        'Verifica Internet, DNS y las reglas del firewall.',
+      );
+    } on http.ClientException catch (error) {
+      debugPrint('Error HTTP al conectar con n8n: $error');
+      _showRecipeConnectionError(
+        'La conexión con n8n se interrumpió. '
+        'Verifica Internet e inténtalo nuevamente.',
+      );
+    } on FormatException catch (error) {
+      debugPrint('No se pudo preparar la solicitud de receta: $error');
+      _showRecipeError(
+        'No se pudo preparar una solicitud válida para n8n. '
+        'Revisa la trama capturada y el valor esperado.',
+      );
+    } on StateError catch (error) {
+      debugPrint('Estado inválido al solicitar la receta: $error');
+      _showRecipeError(
+        'No se pudo validar la licencia instalada antes de solicitar la receta.',
+      );
     } catch (e) {
       debugPrint('Error de conexión con n8n: $e');
-      if (mounted) {
-        setState(() {
-          _uiStatusMessage = recipeServiceUnavailableMessage;
-        });
-      }
+      _showRecipeError(
+        'Ocurrió un error inesperado al solicitar la receta. '
+        'Inténtalo nuevamente o contacta a soporte.',
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -1412,6 +1501,33 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  void _showRecipeConnectionError(String message) {
+    _showRecipeError('$message La receta actual no fue modificada.');
+  }
+
+  void _showRecipeError(String message) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _uiStatusMessage = message;
+      _recipeStatusMessage = message;
+      _recipeStatusIsError = true;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Cerrar',
+          onPressed: messenger.hideCurrentSnackBar,
+        ),
+      ),
+    );
+  }
+
   void _clearRecipe() async {
     await _settingsRepository.clearRecipe();
     setState(() {
@@ -1419,6 +1535,8 @@ class _MainScreenState extends State<MainScreen> {
       _expectedValue = '';
       _cleanWeightDisplay = 'Sin receta';
       _uiStatusMessage = 'Receta eliminada.';
+      _recipeStatusMessage = _uiStatusMessage;
+      _recipeStatusIsError = false;
     });
   }
 
@@ -1638,6 +1756,14 @@ end tell
   }
 
   void _connect() async {
+    if (_isStartupLicenseCheckPending) {
+      setState(() {
+        _uiStatusMessage = 'Validando la licencia con el servidor.';
+        _networkDiagnostics =
+            'La conexión se habilitará cuando termine la validación inicial.';
+      });
+      return;
+    }
     if (_isDemoExpired) {
       setState(() {
         _uiStatusMessage = _demoStatusMessage;
@@ -1890,7 +2016,8 @@ end tell
         from: _selectedInputUnit,
         to: _selectedOutputUnit,
       );
-      final valorString = valorConvertido.toStringAsFixed(
+      final netWeight = _tare.subtractFrom(valorConvertido, _selectedOutputUnit);
+      final valorString = netWeight.toStringAsFixed(
         reading.decimalPlaces,
       );
       final pesoFinalAInyectar = ReadingParser.formatWeight(
@@ -1899,7 +2026,15 @@ end tell
       );
 
       _cleanWeightDisplay = pesoFinalAInyectar;
+      _netWeightDisplay = pesoFinalAInyectar;
+      _readingOutputUnit = _selectedOutputUnit;
+      _grossWeightDisplay = ReadingParser.formatWeight(
+        valorConvertido.toStringAsFixed(reading.decimalPlaces),
+        expectedValue: _expectedValue,
+      );
       _scheduleTelemetryRefresh();
+
+      if (_isEditingTare) return;
 
       final now = DateTime.now();
       final wasWaitingForZero = _weightCaptureController.waitingForZero;
@@ -1908,6 +2043,9 @@ end tell
           value: parsedWeight,
           unit: _selectedInputUnit,
           captureText: pesoFinalAInyectar,
+          canCaptureNetWeight: _tare.value == 0 ||
+              (netWeight.isFinite && netWeight > 0 &&
+               (double.tryParse(valorString) ?? 0) > 0),
         ),
         receivedAt: now,
       );
@@ -1926,7 +2064,7 @@ end tell
       await _applyWeightCaptureDecision(
         decision,
         displayText: pesoFinalAInyectar,
-        zeroDisplayText: nuevoPesoOriginal,
+        zeroDisplayText: _tare.value == 0 ? nuevoPesoOriginal : pesoFinalAInyectar,
       );
     }
   }
@@ -2024,13 +2162,26 @@ end tell
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              CurrentWeightPanel(weightDisplay: _cleanWeightDisplay),
+              CurrentWeightPanel(
+                weightDisplay: _cleanWeightDisplay,
+                grossDisplay: _isConnected && !_isDemoExpired &&
+                    !_isStartupLicenseCheckPending && _savedRegex.isNotEmpty &&
+                    _cleanWeightDisplay == _netWeightDisplay
+                    ? _grossWeightDisplay : null,
+                unitDisplay: _readingOutputUnit.code,
+                tareDisplay: '${_tare.value} ${_tare.unit.code}',
+                tareActive: _tare.value > 0,
+                onChangeTare: _isTyping || _isEditingTare ? null : _editTare,
+                onClearTare: _isTyping || _isEditingTare ? null
+                    : () => _applyTare(const TareWeight()),
+              ),
               const SizedBox(height: 10),
               ConnectionStatusPanel(
                 activeDeviceLabel: _activeDeviceLabel(),
                 uiStatusMessage: _uiStatusMessage,
                 isConnected: showingConnected,
-                isInteractionBlocked: _isDemoExpired,
+                isInteractionBlocked:
+                    _isDemoExpired || _isStartupLicenseCheckPending,
                 isError: _captureStatusIsError,
                 onToggleConnection: showingConnected ? _disconnect : _connect,
               ),
@@ -2176,8 +2327,10 @@ end tell
               const SizedBox(height: 10),
               RecipeActionsPanel(
                 savedRegex: _savedRegex,
-                isEnabled: !_isDemoExpired,
+                isEnabled: !_isDemoExpired && !_isStartupLicenseCheckPending,
                 isProcessing: _isSendingToN8n,
+                statusMessage: _recipeStatusMessage,
+                statusIsError: _recipeStatusIsError,
                 onSendToN8n: _sendToN8nIa,
                 onClearRecipe: _clearRecipe,
               ),

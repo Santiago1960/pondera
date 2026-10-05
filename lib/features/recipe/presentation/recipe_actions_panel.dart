@@ -9,6 +9,8 @@ class RecipeActionsPanel extends StatelessWidget {
     required this.isProcessing,
     required this.onSendToN8n,
     required this.onClearRecipe,
+    this.statusMessage,
+    this.statusIsError = false,
     super.key,
   });
 
@@ -17,6 +19,8 @@ class RecipeActionsPanel extends StatelessWidget {
   final bool isProcessing;
   final VoidCallback onSendToN8n;
   final VoidCallback onClearRecipe;
+  final String? statusMessage;
+  final bool statusIsError;
 
   bool get hasActiveRecipe => savedRegex.isNotEmpty;
 
@@ -26,6 +30,8 @@ class RecipeActionsPanel extends StatelessWidget {
       title: 'Receta de lectura',
       summary: isProcessing
           ? 'Procesando con n8n…'
+          : statusMessage?.isNotEmpty ?? false
+          ? statusMessage
           : (hasActiveRecipe ? 'Receta activa' : 'Sin receta configurada'),
       icon: Icons.data_object,
       child: Column(
@@ -42,6 +48,13 @@ class RecipeActionsPanel extends StatelessWidget {
           if (isProcessing) ...[
             const SizedBox(height: 10),
             const LinearProgressIndicator(),
+          ],
+          if (!isProcessing && (statusMessage?.isNotEmpty ?? false)) ...[
+            const SizedBox(height: 12),
+            _RecipeStatusMessage(
+              message: statusMessage!,
+              isError: statusIsError,
+            ),
           ],
           if (hasActiveRecipe) ...[
             const SizedBox(height: 12),
@@ -118,5 +131,49 @@ class RecipeActionsPanel extends StatelessWidget {
     if (confirmed ?? false) {
       onClearRecipe();
     }
+  }
+}
+
+class _RecipeStatusMessage extends StatelessWidget {
+  const _RecipeStatusMessage({required this.message, required this.isError});
+
+  final String message;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final foregroundColor = isError
+        ? colorScheme.onErrorContainer
+        : colorScheme.onSecondaryContainer;
+    final backgroundColor = isError
+        ? colorScheme.errorContainer
+        : colorScheme.secondaryContainer;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isError ? Icons.error_outline : Icons.check_circle_outline,
+            size: 20,
+            color: foregroundColor,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SelectableText(
+              message,
+              style: TextStyle(color: foregroundColor),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

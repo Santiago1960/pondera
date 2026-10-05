@@ -47,7 +47,7 @@ class OfflineLicenseController {
       expectedLicenseId: current.payload?.licenseId,
       checkLicenseId: true,
     );
-    if (!status.isAllow && !status.isDefinitiveBlock) return current;
+    if (!status.isAllow && !status.deniesAccess) return current;
     final stored = _licenseRepository.loadSignedStatus();
     if (stored != null) {
       try {
@@ -148,10 +148,17 @@ class OfflineLicenseController {
           payload: local.payload,
         );
       }
-      if (status.revokesLicense &&
-          status.licenseId == local.payload?.licenseId) {
+      final appliesToInstalledLicense =
+          status.licenseId == local.payload?.licenseId;
+      if (status.deniesAccess && appliesToInstalledLicense) {
+        final verificationStatus = switch (status.reasonCode) {
+          'license_revoked' => LicenseVerificationStatus.revoked,
+          'license_expired' ||
+          'trial_expired' => LicenseVerificationStatus.expired,
+          _ => LicenseVerificationStatus.blocked,
+        };
         return LicenseVerificationResult(
-          status: LicenseVerificationStatus.revoked,
+          status: verificationStatus,
           message: status.message,
           payload: local.payload,
         );

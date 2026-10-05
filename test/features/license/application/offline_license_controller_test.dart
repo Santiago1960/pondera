@@ -287,6 +287,75 @@ void main() {
       expect(stillBlocked.status, LicenseVerificationStatus.revoked);
     },
   );
+
+  test(
+    'bloquea una licencia local ante un rechazo firmado por incompatibilidad',
+    () async {
+      final preferences = await SharedPreferences.getInstance();
+      final controller = _buildController(preferences, 'INSTALL-TEST');
+      final license = await _signedLicense(
+        installationId: 'INSTALL-TEST',
+        expiresAt: DateTime.utc(2027),
+      );
+      await controller.import(license.encode(), now: DateTime.utc(2026, 10, 2));
+      const requestId = 'RAC-00000000-0000-4000-8000-000000000002';
+      final mismatch = await _signedStatus(
+        requestId: requestId,
+        installationId: 'INSTALL-TEST',
+        licenseId: 'LIC-TEST',
+        decision: 'deny',
+        accessStatus: 'unregistered',
+        reasonCode: 'license_mismatch',
+        serverTime: DateTime.utc(2026, 10, 2, 15),
+      );
+
+      final rejected = await controller.acceptRemoteStatus(
+        mismatch.encode(),
+        expectedRequestId: requestId,
+        now: DateTime.utc(2026, 10, 2),
+      );
+      final reloaded = await controller.validateStored(
+        now: DateTime.utc(2026, 10, 2),
+      );
+
+      expect(rejected.status, LicenseVerificationStatus.blocked);
+      expect(rejected.isUsable, isFalse);
+      expect(reloaded.status, LicenseVerificationStatus.blocked);
+    },
+  );
+
+  test(
+    'conserva la licencia ante un error remoto transitorio firmado',
+    () async {
+      final preferences = await SharedPreferences.getInstance();
+      final controller = _buildController(preferences, 'INSTALL-TEST');
+      final license = await _signedLicense(
+        installationId: 'INSTALL-TEST',
+        expiresAt: DateTime.utc(2027),
+      );
+      await controller.import(license.encode(), now: DateTime.utc(2026, 10, 2));
+      const requestId = 'RAC-00000000-0000-4000-8000-000000000003';
+      final unavailable = await _signedStatus(
+        requestId: requestId,
+        installationId: 'INSTALL-TEST',
+        licenseId: 'LIC-TEST',
+        decision: 'error',
+        accessStatus: 'unregistered',
+        reasonCode: 'service_unavailable',
+        serverTime: DateTime.utc(2026, 10, 2, 15),
+      );
+
+      final result = await controller.acceptRemoteStatus(
+        unavailable.encode(),
+        expectedRequestId: requestId,
+        now: DateTime.utc(2026, 10, 2),
+      );
+
+      expect(result.status, LicenseVerificationStatus.active);
+      expect(result.isUsable, isTrue);
+      expect(preferences.getString(PreferenceKeys.signedLicenseStatus), isNull);
+    },
+  );
 }
 
 OfflineLicenseController _buildController(

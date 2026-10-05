@@ -71,4 +71,36 @@ void main() {
     await tester.tap(find.text('Procesando…'));
     expect(sendCount, 0);
   });
+
+  testWidgets('mantiene visible el error de n8n en el panel de receta', (
+    tester,
+  ) async {
+    const message =
+        'No se pudo conectar con n8n. Verifica Internet, DNS y el firewall.';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildPonderaTheme(Brightness.light),
+        home: const Scaffold(
+          body: RecipeActionsPanel(
+            savedRegex: '',
+            isEnabled: true,
+            isProcessing: false,
+            statusMessage: message,
+            statusIsError: true,
+            onSendToN8n: _doNothing,
+            onClearRecipe: _doNothing,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text(message), findsOneWidget);
+    await tester.tap(find.text('Receta de lectura'));
+    await tester.pumpAndSettle();
+
+    expect(find.text(message), findsNWidgets(2));
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+  });
 }
+
+void _doNothing() {}

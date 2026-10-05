@@ -24,11 +24,16 @@ class LicenseStatusResponse {
   bool get blocksInstallation =>
       decision == 'deny' && reasonCode == 'installation_blocked';
   bool get isAllow => decision == 'allow';
+  bool get deniesAccess => decision == 'deny';
   bool get isDefinitiveBlock => revokesLicense || blocksInstallation;
 
   String get message => switch (reasonCode) {
     'license_revoked' => 'La licencia fue revocada por Bitgenial.',
     'installation_blocked' => 'La instalación fue bloqueada por Bitgenial.',
+    'license_expired' ||
+    'trial_expired' => 'La licencia venció según la validación del servidor.',
+    'license_mismatch' =>
+      'La licencia instalada no está registrada correctamente en el servidor.',
     _ => 'La licencia fue verificada con el servidor.',
   };
 
@@ -119,17 +124,26 @@ class LicenseStatusResponse {
     };
     final coherent = switch (decision) {
       'allow' => const {
-        'trial_active',
-        'licensed',
-        'grace_period',
-      }.contains(accessStatus),
+        'trial_started',
+        'trial_valid',
+        'license_valid',
+        'license_grace',
+      }.contains(reasonCode),
       'deny' => const {
         'trial_expired',
-        'expired',
-        'revoked',
-        'blocked',
-      }.contains(accessStatus),
-      'error' => true,
+        'license_expired',
+        'license_revoked',
+        'installation_blocked',
+        'license_mismatch',
+      }.contains(reasonCode),
+      'error' => const {
+        'idempotency_conflict',
+        'invalid_request',
+        'unsupported_product',
+        'rate_limited',
+        'service_unavailable',
+        'internal_error',
+      }.contains(reasonCode),
       _ => false,
     };
     if (!coherent ||

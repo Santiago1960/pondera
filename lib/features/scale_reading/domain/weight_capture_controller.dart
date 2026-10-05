@@ -16,6 +16,7 @@ enum WeightCaptureOutcome {
   noReading,
   invalidConfiguration,
   continuousInputDetected,
+  netWeightRejected,
 }
 
 class WeightCaptureRange {
@@ -105,11 +106,13 @@ class WeightCaptureReading {
     required this.value,
     required this.unit,
     required this.captureText,
+    this.canCaptureNetWeight = true,
   });
 
   final double value;
   final WeightUnit unit;
   final String captureText;
+  final bool canCaptureNetWeight;
 }
 
 class WeightCaptureDecision {
@@ -318,6 +321,12 @@ class WeightCaptureController {
       );
     }
 
+    if (!reading.canCaptureNetWeight) {
+      return WeightCaptureDecision.rejected(
+        WeightCaptureOutcome.netWeightRejected,
+        reading: reading,
+      );
+    }
     _outOfRangeReported = false;
     _waitingForZero = true;
     _stableCandidate = null;
@@ -326,6 +335,12 @@ class WeightCaptureController {
   }
 
   WeightCaptureDecision? _validateReading(WeightCaptureReading reading) {
+    if (!reading.canCaptureNetWeight) {
+      return WeightCaptureDecision.rejected(
+        WeightCaptureOutcome.netWeightRejected,
+        reading: reading,
+      );
+    }
     final configurationError = _configuration.validationError;
     if (configurationError != null) {
       return WeightCaptureDecision.rejected(
