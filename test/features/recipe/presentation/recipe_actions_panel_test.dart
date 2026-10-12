@@ -61,7 +61,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Procesando con n8n…'), findsOneWidget);
+    expect(find.text('Analizando la muestra…'), findsOneWidget);
     await tester.tap(find.text('Receta de lectura'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));

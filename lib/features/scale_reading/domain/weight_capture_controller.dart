@@ -11,6 +11,7 @@ enum WeightCaptureOutcome {
   none,
   capture,
   zeroRejected,
+  belowReturnWeight,
   outOfRange,
   waitingForZero,
   noReading,
@@ -77,6 +78,7 @@ class WeightCaptureConfiguration {
     this.mode = WeightCaptureMode.indicatorPrint,
     this.stableDuration = const Duration(seconds: 1),
     this.range = const WeightCaptureRange.unrestricted(),
+    this.returnWeight = 0,
   });
 
   static const minimumStableDuration = Duration(milliseconds: 100);
@@ -85,8 +87,20 @@ class WeightCaptureConfiguration {
   final WeightCaptureMode mode;
   final Duration stableDuration;
   final WeightCaptureRange range;
+  // Raw indicator value at rest: zero, or the negative sample defining its tare.
+  final double returnWeight;
+
+  bool get hasTare => returnWeight < 0;
+
+  static double returnWeightFromExpectedValue(String expectedValue) {
+    final value = double.tryParse(expectedValue.trim().replaceAll(',', '.'));
+    return value != null && value.isFinite && value < 0 ? value : 0;
+  }
 
   String? get validationError {
+    if (!returnWeight.isFinite || returnWeight > 0) {
+      return 'El punto de retorno debe ser cero o un peso negativo válido.';
+    }
     final rangeError = range.validationError;
     if (rangeError != null) {
       return rangeError;
@@ -203,7 +217,7 @@ class WeightCaptureController {
       }
     }
 
-    if (_isZero(reading.value)) {
+    if (_isReturnWeight(reading.value)) {
       _resetAutomaticState();
       if (_configuration.mode != WeightCaptureMode.indicatorPrint) {
         _waitingForZero = false;
@@ -236,7 +250,7 @@ class WeightCaptureController {
         WeightCaptureOutcome.noReading,
       );
     }
-    if (_isZero(reading.value)) {
+    if (_isReturnWeight(reading.value)) {
       return WeightCaptureDecision.rejected(
         WeightCaptureOutcome.zeroRejected,
         reading: reading,
@@ -271,6 +285,10 @@ class WeightCaptureController {
     DateTime receivedAt,
   ) {
     if (_waitingForZero) {
+      return WeightCaptureDecision.none;
+    }
+    if (reading.value < _configuration.returnWeight - zeroTolerance) {
+      _resetAutomaticState();
       return WeightCaptureDecision.none;
     }
 
@@ -334,6 +352,12 @@ class WeightCaptureController {
         configurationError: configurationError,
       );
     }
+    if (reading.value < _configuration.returnWeight - zeroTolerance) {
+      return WeightCaptureDecision.rejected(
+        WeightCaptureOutcome.belowReturnWeight,
+        reading: reading,
+      );
+    }
     if (!_configuration.range.accepts(reading.value, reading.unit)) {
       return WeightCaptureDecision.rejected(
         WeightCaptureOutcome.outOfRange,
@@ -347,7 +371,8 @@ class WeightCaptureController {
     return null;
   }
 
-  bool _isZero(double value) => value.abs() < zeroTolerance;
+  bool _isReturnWeight(double value) =>
+      (value - _configuration.returnWeight).abs() < zeroTolerance;
 
   WeightCaptureDecision? _detectContinuousManualInput(
     WeightCaptureReading reading,

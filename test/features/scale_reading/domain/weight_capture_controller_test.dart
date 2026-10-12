@@ -4,10 +4,7 @@ import 'package:pondera/features/scale_reading/domain/weight_unit.dart';
 
 void main() {
   test('solo los modos continuos requieren polling activo', () {
-    expect(
-      WeightCaptureMode.indicatorPrint.requiresContinuousInput,
-      isFalse,
-    );
+    expect(WeightCaptureMode.indicatorPrint.requiresContinuousInput, isFalse);
     expect(WeightCaptureMode.keyboardF12.requiresContinuousInput, isTrue);
     expect(WeightCaptureMode.automaticStable.requiresContinuousInput, isTrue);
   });
@@ -252,6 +249,48 @@ void main() {
   });
 
   group('modo F12', () {
+    test('la tara -0.20 rearma con -0.20, y el cero no rearma', () {
+      final controller = WeightCaptureController(
+        configuration: const WeightCaptureConfiguration(
+          mode: WeightCaptureMode.keyboardF12,
+          returnWeight: -0.20,
+        ),
+      );
+      controller.onReading(reading(-0.20), receivedAt: start);
+      expect(controller.waitingForZero, isFalse);
+      expect(
+        controller.onF12Pressed().outcome,
+        WeightCaptureOutcome.zeroRejected,
+      );
+      controller.onReading(reading(0.38), receivedAt: start);
+      expect(controller.onF12Pressed().outcome, WeightCaptureOutcome.capture);
+      controller.onReading(reading(0), receivedAt: start);
+      expect(controller.waitingForZero, isTrue);
+      expect(
+        controller.onF12Pressed().outcome,
+        WeightCaptureOutcome.waitingForZero,
+      );
+      controller.onReading(reading(-0.20), receivedAt: start);
+      controller.onReading(reading(0.45), receivedAt: start);
+      expect(controller.onF12Pressed().outcome, WeightCaptureOutcome.capture);
+    });
+
+    test('sin tara no captura valores negativos tras pasar por cero', () {
+      final controller = WeightCaptureController(
+        configuration: const WeightCaptureConfiguration(
+          mode: WeightCaptureMode.keyboardF12,
+        ),
+      );
+      controller.onReading(reading(0), receivedAt: start);
+      controller.onReading(reading(-0.20), receivedAt: start);
+      expect(
+        controller.onF12Pressed().outcome,
+        WeightCaptureOutcome.belowReturnWeight,
+      );
+      controller.onReading(reading(0.38), receivedAt: start);
+      expect(controller.onF12Pressed().outcome, WeightCaptureOutcome.capture);
+    });
+
     test('requiere cero, captura una vez y vuelve a bloquearse', () {
       final controller = WeightCaptureController(
         configuration: const WeightCaptureConfiguration(
@@ -313,6 +352,65 @@ void main() {
   });
 
   group('modo automático', () {
+    test(
+      'con tara completa dos ciclos volviendo al valor negativo de la muestra',
+      () {
+        final controller = WeightCaptureController(
+          configuration: const WeightCaptureConfiguration(
+            mode: WeightCaptureMode.automaticStable,
+            stableDuration: Duration(milliseconds: 500),
+            returnWeight: -0.20,
+          ),
+        );
+        controller.onReading(reading(-0.20), receivedAt: start);
+        controller.onReading(reading(0.38), receivedAt: start);
+        expect(
+          controller
+              .onReading(
+                reading(0.38),
+                receivedAt: start.add(const Duration(milliseconds: 500)),
+              )
+              .shouldCapture,
+          isTrue,
+        );
+        controller.onReading(
+          reading(0),
+          receivedAt: start.add(const Duration(seconds: 1)),
+        );
+        expect(controller.waitingForZero, isTrue);
+        controller.onReading(
+          reading(0.45),
+          receivedAt: start.add(const Duration(seconds: 2)),
+        );
+        expect(
+          controller
+              .onReading(
+                reading(0.45),
+                receivedAt: start.add(const Duration(seconds: 3)),
+              )
+              .shouldCapture,
+          isFalse,
+        );
+        controller.onReading(
+          reading(-0.20),
+          receivedAt: start.add(const Duration(seconds: 4)),
+        );
+        controller.onReading(
+          reading(-0.10),
+          receivedAt: start.add(const Duration(seconds: 5)),
+        );
+        expect(
+          controller
+              .onReading(
+                reading(-0.10),
+                receivedAt: start.add(const Duration(milliseconds: 5500)),
+              )
+              .shouldCapture,
+          isTrue,
+        );
+      },
+    );
+
     test('captura al completar estabilidad y solo se rearma con cero', () {
       final controller = WeightCaptureController(
         configuration: const WeightCaptureConfiguration(
@@ -485,6 +583,42 @@ void main() {
     expect(controller.latestReading, isNull);
     expect(controller.waitingForZero, isTrue);
     expect(controller.onF12Pressed().outcome, WeightCaptureOutcome.noReading);
+  });
+
+  test(
+    'la muestra negativa define la tara; positivos y cero no definen tara',
+    () {
+      expect(
+        WeightCaptureConfiguration.returnWeightFromExpectedValue('-0.20'),
+        -0.20,
+      );
+      expect(
+        WeightCaptureConfiguration.returnWeightFromExpectedValue(' -0,20 '),
+        -0.20,
+      );
+      expect(
+        WeightCaptureConfiguration.returnWeightFromExpectedValue('0.38'),
+        0,
+      );
+      expect(WeightCaptureConfiguration.returnWeightFromExpectedValue('0'), 0);
+    },
+  );
+
+  test('cambiar de receta con tara a sin tara exige pasar por cero', () {
+    final controller = WeightCaptureController(
+      configuration: const WeightCaptureConfiguration(
+        mode: WeightCaptureMode.keyboardF12,
+        returnWeight: -0.20,
+      ),
+    );
+    controller.onReading(reading(-0.20), receivedAt: start);
+    controller.updateConfiguration(
+      const WeightCaptureConfiguration(mode: WeightCaptureMode.keyboardF12),
+    );
+    controller.onReading(reading(-0.20), receivedAt: start);
+    expect(controller.waitingForZero, isTrue);
+    controller.onReading(reading(0), receivedAt: start);
+    expect(controller.waitingForZero, isFalse);
   });
 
   test('descarta una lectura inválida antes de F12', () {

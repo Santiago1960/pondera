@@ -14,7 +14,7 @@ class ReadingParser {
   const ReadingParser._();
 
   static bool isValidExpectedValue(String value) {
-    return RegExp(r'^\d+(?:[.,]\d+)?$').hasMatch(value.trim());
+    return RegExp(r'^-?\d+(?:[.,]\d+)?$').hasMatch(value.trim());
   }
 
   static ReadingParseResult? parse(
@@ -27,15 +27,26 @@ class ReadingParser {
       return null;
     }
 
-    final capturedWeight = match.groupCount > 0
+    var capturedWeight = match.groupNames.contains('weight')
+        ? match.namedGroup('weight')
+        : match.groupCount > 0
         ? match.group(1) ?? match.group(0)
         : match.group(0);
+    if (match.groupNames.contains('sign')) {
+      final sign = match.namedGroup('sign')?.trim() ?? '';
+      if (capturedWeight == null ||
+          !RegExp(r'^\d+(?:[.,]\d+)?$').hasMatch(capturedWeight.trim()) ||
+          !['', '+', '-'].contains(sign)) {
+        return null;
+      }
+      capturedWeight = '$sign${capturedWeight.trim()}';
+    }
     final formattedWeight = formatWeight(
       capturedWeight,
       expectedValue: expectedValue,
     );
     final numericText = formattedWeight
-        .replaceAll(RegExp(r'[^0-9.,]'), '')
+        .replaceAll(RegExp(r'[^0-9.,+-]'), '')
         .replaceAll(',', '.');
 
     return ReadingParseResult(

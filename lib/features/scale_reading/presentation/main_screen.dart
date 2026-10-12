@@ -38,8 +38,10 @@ import '../../license/presentation/activation_request_dialog.dart';
 import '../../license/presentation/license_status_panel.dart';
 import '../../recipe/domain/recipe_access_request.dart';
 import '../../recipe/domain/recipe_access_response.dart';
+import '../../recipe/domain/recipe_sample.dart';
 import '../../recipe/domain/recipe_transport_policy.dart';
 import '../../recipe/presentation/recipe_actions_panel.dart';
+import '../../recipe/presentation/recipe_sample_dialog.dart';
 import '../../settings/data/settings_repository.dart';
 import '../domain/reading_frame_splitter.dart';
 import '../domain/reading_parser.dart';
@@ -79,6 +81,8 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   static const _userManualAssetPath = 'assets/help/pondera_manual_usuario.pdf';
   static const _briefConfirmationDuration = Duration(milliseconds: 800);
+  static const _invalidRecipeSampleMessage =
+      'La receta recibida no reproduce el peso de la muestra capturada. La receta actual no fue modificada.';
 
   ConnectionType _selectedConnectionType = ConnectionType.ethernet;
   String _deviceIp = '192.168.100.134';
@@ -116,6 +120,7 @@ class _MainScreenState extends State<MainScreen> {
   bool _manualDisconnectRequested = false;
   bool _captureStatusIsError = false;
   bool _missingContinuousInputReported = false;
+  bool _recipeMismatchReported = false;
 
   final List<RawDataLogEntry> _receivedDataLog = [];
   int _receptionSequence = 0;
@@ -663,7 +668,26 @@ class _MainScreenState extends State<MainScreen> {
       mode: _selectedCaptureMode,
       stableDuration: Duration(milliseconds: stableMilliseconds),
       range: range,
+      returnWeight: _savedRegex.isEmpty
+          ? 0
+          : WeightCaptureConfiguration.returnWeightFromExpectedValue(
+              _expectedValue,
+            ),
     );
+  }
+
+  String get _captureReturnLabel =>
+      _weightCaptureController.configuration.hasTare
+      ? '${_expectedValue.trim()} ${_selectedInputUnit.label}'
+      : 'cero';
+
+  void _syncCaptureWithRecipe() {
+    _weightCaptureController.updateConfiguration(
+      _currentWeightCaptureConfiguration(),
+    );
+    _recipeMismatchReported = false;
+    _captureStatusIsError = false;
+    _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
   }
 
   void _saveWeightCaptureConfig() async {
@@ -734,6 +758,7 @@ class _MainScreenState extends State<MainScreen> {
         mode: mode,
         stableDuration: activeConfiguration.stableDuration,
         range: activeConfiguration.range,
+        returnWeight: activeConfiguration.returnWeight,
       ),
     );
     _missingContinuousInputReported = false;
@@ -752,9 +777,9 @@ class _MainScreenState extends State<MainScreen> {
       _uiStatusMessage = switch (mode) {
         WeightCaptureMode.indicatorPrint => 'Modo Print del indicador activo.',
         WeightCaptureMode.keyboardF12 =>
-          'Modo F12 activo. Esperando que la balanza pase por cero.',
+          'Modo F12 activo. Esperando que la balanza vuelva a $_captureReturnLabel.',
         WeightCaptureMode.automaticStable =>
-          'Modo automático activo. Esperando que la balanza pase por cero.',
+          'Modo automático activo. Esperando que la balanza vuelva a $_captureReturnLabel.',
       };
     });
     _showBriefConfirmation('Modo de captura actualizado');
@@ -843,7 +868,19 @@ class _MainScreenState extends State<MainScreen> {
       if (zeroDisplayText != null || capturedDisplay != null) {
         _cleanWeightDisplay = zeroDisplayText ?? capturedDisplay!;
       }
-      _uiStatusMessage = 'Peso cero. No se registró.';
+      _uiStatusMessage = _weightCaptureController.configuration.hasTare
+          ? 'Tara en reposo ($_captureReturnLabel). No se registró.'
+          : 'Peso cero. No se registró.';
+      _captureStatusIsError = true;
+      unawaited(_showOperatorAlert(message: _uiStatusMessage));
+      _scheduleTelemetryRefresh();
+      return;
+    }
+
+    if (decision.outcome == WeightCaptureOutcome.belowReturnWeight) {
+      _uiStatusMessage = _weightCaptureController.configuration.hasTare
+          ? 'Peso inferior al punto de retorno $_captureReturnLabel. No se registró.'
+          : 'Peso negativo sin tara configurada. No se registró.';
       _captureStatusIsError = true;
       unawaited(_showOperatorAlert(message: _uiStatusMessage));
       _scheduleTelemetryRefresh();
@@ -885,11 +922,11 @@ class _MainScreenState extends State<MainScreen> {
 
     if (decision.outcome == WeightCaptureOutcome.waitingForZero) {
       _uiStatusMessage =
-          'Retire el peso y espere que la balanza vuelva a cero.';
+          'Retire el peso y espere que la balanza vuelva a $_captureReturnLabel.';
       _captureStatusIsError = true;
       unawaited(
         _showOperatorAlert(
-          title: 'Esperando paso por cero',
+          title: 'Esperando retorno a $_captureReturnLabel',
           message: _uiStatusMessage,
         ),
       );
@@ -1113,6 +1150,7 @@ class _MainScreenState extends State<MainScreen> {
     required http.Response httpResponse,
     required String requestId,
     required String expectedValue,
+    required RecipeSample sample,
   }) async {
     try {
       final response = RecipeAccessResponse.decode(
@@ -1135,8 +1173,14 @@ class _MainScreenState extends State<MainScreen> {
       final newRegex = response.recipeAction == RecipeAction.replace
           ? response.regexPattern!
           : null;
-      if (newRegex != null) {
-        RegExp(newRegex);
+      if (newRegex != null &&
+          !sample.matchesPattern(newRegex, expectedValue: expectedValue)) {
+        if (mounted) {
+          setState(() {
+            _uiStatusMessage = _invalidRecipeSampleMessage;
+          });
+        }
+        return;
       }
       await _settingsRepository.saveRecipeAccessDates(
         trialStartedAt: response.trialStartedAt,
@@ -1153,7 +1197,8 @@ class _MainScreenState extends State<MainScreen> {
           setState(() {
             _savedRegex = newRegex;
             _expectedValue = expectedValue;
-            _uiStatusMessage = response.message;
+            _syncCaptureWithRecipe();
+            _uiStatusMessage = 'Receta de lectura creada correctamente.';
           });
         }
         return;
@@ -1165,7 +1210,7 @@ class _MainScreenState extends State<MainScreen> {
           setState(() {
             _savedRegex = '';
             _expectedValue = '';
-            _cleanWeightDisplay = 'Sin receta';
+            _syncCaptureWithRecipe();
             _uiStatusMessage = response.message;
           });
         }
@@ -1228,58 +1273,14 @@ class _MainScreenState extends State<MainScreen> {
     return _demoLicense!.isExpired ? 'demo_expired' : 'demo';
   }
 
-  Future<String?> _requestExpectedValue() async {
-    final formKey = GlobalKey<FormState>();
-    var enteredValue = _expectedValue;
-    final expectedValue = await showDialog<String>(
+  Future<String?> _requestExpectedValue(RecipeSample sample) {
+    return showDialog<String>(
       context: context,
-      builder: (dialogContext) {
-        void submit() {
-          if (formKey.currentState?.validate() ?? false) {
-            Navigator.of(dialogContext).pop(enteredValue.trim());
-          }
-        }
-
-        return AlertDialog(
-          title: const Text('Valor esperado'),
-          content: Form(
-            key: formKey,
-            child: TextFormField(
-              initialValue: enteredValue,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              textInputAction: TextInputAction.done,
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
-              ],
-              decoration: const InputDecoration(
-                labelText: 'Peso correspondiente a la trama',
-                hintText: 'Ej.: 0.130 o 0,130',
-                border: OutlineInputBorder(),
-              ),
-              validator: (value) {
-                if (!ReadingParser.isValidExpectedValue(value ?? '')) {
-                  return 'Ingrese un valor válido, por ejemplo 0.130 o 0,130.';
-                }
-                return null;
-              },
-              onChanged: (value) => enteredValue = value,
-              onFieldSubmitted: (_) => submit(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(onPressed: submit, child: const Text('Enviar')),
-          ],
-        );
-      },
+      builder: (_) => RecipeSampleDialog(
+        sample: sample,
+        initialExpectedValue: _expectedValue,
+      ),
     );
-    return expectedValue;
   }
 
   Future<void> _sendToN8nIa() async {
@@ -1303,7 +1304,8 @@ class _MainScreenState extends State<MainScreen> {
       latestRawData,
     ).completeFrames;
     final rawData = completeFrames.lastOrNull ?? latestRawData;
-    final expectedValue = await _requestExpectedValue();
+    final sample = RecipeSample(rawData);
+    final expectedValue = await _requestExpectedValue(sample);
     if (expectedValue == null || !mounted) {
       return;
     }
@@ -1311,7 +1313,7 @@ class _MainScreenState extends State<MainScreen> {
     if (mounted) {
       setState(() {
         _isSendingToN8n = true;
-        _uiStatusMessage = 'Enviando muestra a n8n...';
+        _uiStatusMessage = 'Enviando muestra para análisis…';
       });
     }
 
@@ -1323,6 +1325,7 @@ class _MainScreenState extends State<MainScreen> {
           httpResponse: response,
           requestId: requestId,
           expectedValue: expectedValue,
+          sample: sample,
         );
         return;
       }
@@ -1335,7 +1338,7 @@ class _MainScreenState extends State<MainScreen> {
           if (mounted) {
             setState(() {
               _uiStatusMessage =
-                  'n8n respondió 200, pero no envió JSON válido.';
+                  'El servicio de análisis envió una respuesta inválida. La receta actual no fue modificada.';
             });
           }
           return;
@@ -1344,7 +1347,7 @@ class _MainScreenState extends State<MainScreen> {
           if (mounted) {
             setState(() {
               _uiStatusMessage =
-                  'n8n respondió 200, pero el JSON no es un objeto.';
+                  'El servicio de análisis envió una respuesta inválida. La receta actual no fue modificada.';
             });
           }
           return;
@@ -1352,12 +1355,10 @@ class _MainScreenState extends State<MainScreen> {
         final regexValue = responseData['regex_pattern'];
         final newRegex = regexValue is String ? regexValue.trim() : '';
         if (newRegex.isNotEmpty) {
-          try {
-            RegExp(newRegex);
-          } on FormatException {
+          if (!sample.matchesPattern(newRegex, expectedValue: expectedValue)) {
             if (mounted) {
               setState(() {
-                _uiStatusMessage = 'n8n devolvió una receta Regex inválida.';
+                _uiStatusMessage = _invalidRecipeSampleMessage;
               });
             }
             return;
@@ -1371,13 +1372,14 @@ class _MainScreenState extends State<MainScreen> {
             setState(() {
               _savedRegex = newRegex;
               _expectedValue = expectedValue;
-              _uiStatusMessage = '¡Receta Regex guardada con éxito!';
+              _syncCaptureWithRecipe();
+              _uiStatusMessage = 'Receta de lectura creada correctamente.';
             });
           }
         } else if (mounted) {
           setState(() {
             _uiStatusMessage =
-                'n8n respondió 200, pero no devolvió regex_pattern.';
+                'No se pudo crear una receta válida con esta muestra. La receta actual no fue modificada.';
           });
         }
       } else if (isRecipeServiceUnavailableStatus(response.statusCode) &&
@@ -1387,7 +1389,8 @@ class _MainScreenState extends State<MainScreen> {
         });
       } else if (mounted) {
         setState(() {
-          _uiStatusMessage = 'n8n respondió HTTP ${response.statusCode}.';
+          _uiStatusMessage =
+              'El servicio de análisis rechazó la solicitud. La receta actual no fue modificada.';
         });
       }
     } on TimeoutException {
@@ -1417,7 +1420,7 @@ class _MainScreenState extends State<MainScreen> {
     setState(() {
       _savedRegex = '';
       _expectedValue = '';
-      _cleanWeightDisplay = 'Sin receta';
+      _syncCaptureWithRecipe();
       _uiStatusMessage = 'Receta eliminada.';
     });
   }
@@ -1864,8 +1867,19 @@ end tell
         expectedValue: _expectedValue,
       );
       if (reading == null) {
+        _weightCaptureController.clearReading();
+        _cleanWeightDisplay = '---';
+        _captureStatusIsError = true;
+        _uiStatusMessage =
+            'Se reciben datos, pero la trama no coincide con la receta. Actualiza la receta con una muestra del indicador actual.';
+        if (!_recipeMismatchReported) {
+          _recipeMismatchReported = true;
+          unawaited(_showOperatorAlert(message: _uiStatusMessage));
+        }
+        _scheduleTelemetryRefresh();
         return;
       }
+      _recipeMismatchReported = false;
 
       final nuevoPesoOriginal = reading.formattedWeight;
 
@@ -1911,11 +1925,14 @@ end tell
         ),
         receivedAt: now,
       );
-      if (_selectedCaptureMode == WeightCaptureMode.automaticStable &&
+      if (_selectedCaptureMode.requiresContinuousInput &&
           wasWaitingForZero &&
           !_weightCaptureController.waitingForZero) {
         _captureStatusIsError = false;
-        _uiStatusMessage = 'Cero detectado. Esperando un peso estable.';
+        _uiStatusMessage =
+            _selectedCaptureMode == WeightCaptureMode.automaticStable
+            ? 'Retorno a $_captureReturnLabel detectado. Esperando un peso estable.'
+            : 'Retorno a $_captureReturnLabel detectado. F12 listo para registrar.';
         _scheduleTelemetryRefresh();
       }
       if (_isTyping &&
@@ -1995,6 +2012,7 @@ end tell
     _serialPort = null;
     _isConnected = false;
     _missingContinuousInputReported = false;
+    _recipeMismatchReported = false;
     _scalePollingState.reset();
   }
 
@@ -2150,6 +2168,9 @@ end tell
               const SizedBox(height: 10),
               WeightCaptureSettingsPanel(
                 selectedMode: _selectedCaptureMode,
+                tareReturnLabel: _weightCaptureController.configuration.hasTare
+                    ? _captureReturnLabel
+                    : null,
                 rangeEnabled: _captureRangeEnabled,
                 rangeUnit: _captureRangeUnit,
                 minimumController: _captureMinimumController,

@@ -3,7 +3,7 @@ import 'package:pondera/core/config/app_config.dart';
 
 void main() {
   test('n8n permite esperar respuestas de modelos de IA', () {
-    expect(AppConfig.n8nRequestTimeout, const Duration(seconds: 45));
+    expect(AppConfig.n8nRequestTimeout, const Duration(seconds: 90));
     expect(AppConfig.licenseStatusRequestTimeout, const Duration(seconds: 5));
   });
 

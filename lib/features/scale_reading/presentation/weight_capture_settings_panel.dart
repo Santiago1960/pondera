@@ -16,6 +16,7 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
     required this.onRangeEnabledChanged,
     required this.onRangeUnitChanged,
     required this.onSave,
+    this.tareReturnLabel,
     super.key,
   });
 
@@ -29,9 +30,11 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
   final ValueChanged<bool> onRangeEnabledChanged;
   final ValueChanged<WeightUnit> onRangeUnitChanged;
   final VoidCallback onSave;
+  final String? tareReturnLabel;
 
   @override
   Widget build(BuildContext context) {
+    final returnLabel = tareReturnLabel ?? 'cero';
     return SettingsExpansionCard(
       title: 'Captura del peso',
       summary:
@@ -66,15 +69,21 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
               WeightCaptureMode.indicatorPrint =>
                 'Modo activo inmediatamente. Registra cada trama enviada con el botón Print del indicador.',
               WeightCaptureMode.keyboardF12 =>
-                'Modo activo inmediatamente. Presione F12 para registrar el último peso recibido; para registrar otro, la balanza debe volver a cero.',
+                'Presione F12 para registrar el último peso recibido; para registrar otro, la balanza debe volver a $returnLabel.',
               WeightCaptureMode.automaticStable =>
-                'Registra automáticamente un peso cuando permanece estable durante el tiempo configurado; para registrar otro, la balanza debe volver a cero.',
+                'Registra automáticamente un peso cuando permanece estable durante el tiempo configurado; para registrar otro, la balanza debe volver a $returnLabel.',
             },
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
             ),
           ),
+          if (tareReturnLabel != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Tara definida por la muestra. Punto de retorno: $tareReturnLabel.',
+            ),
+          ],
           const SizedBox(height: 8),
           SwitchListTile.adaptive(
             key: const Key('capture-range-toggle'),
@@ -83,7 +92,9 @@ class WeightCaptureSettingsPanel extends StatelessWidget {
             subtitle: Text(
               rangeEnabled
                   ? 'Solo se registran pesos dentro del rango definido.'
-                  : 'Se registra cualquier peso diferente de cero.',
+                  : tareReturnLabel == null
+                  ? 'Se registran pesos positivos.'
+                  : 'Se registran pesos superiores al punto de retorno.',
             ),
             value: rangeEnabled,
             onChanged: onRangeEnabledChanged,

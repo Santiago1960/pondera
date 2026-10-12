@@ -10,6 +10,18 @@ void main() {
       expect(ReadingParser.isValidExpectedValue(' 0,130 '), isTrue);
     });
 
+    test('acepta negativos con signo inicial y cero', () {
+      for (final value in ['-130', '-0.130', ' -0,130 ', '0', '0.000']) {
+        expect(ReadingParser.isValidExpectedValue(value), isTrue);
+      }
+    });
+
+    test('rechaza signos incompletos, repetidos o dentro del número', () {
+      for (final value in ['-', '--0.130', '0-130', '0.130-', '-0,1.30']) {
+        expect(ReadingParser.isValidExpectedValue(value), isFalse);
+      }
+    });
+
     test('rechaza valores vacíos o con separadores ambiguos', () {
       expect(ReadingParser.isValidExpectedValue(''), isFalse);
       expect(ReadingParser.isValidExpectedValue('0,1.30'), isFalse);
@@ -49,6 +61,88 @@ void main() {
   });
 
   group('ReadingParser.parse', () {
+    test('GI-410 cambia de negativo a positivo con relleno en el signo', () {
+      const pattern =
+          r'^\x02[+-]?[0-9]+[ \t]+[+-]?[0-9]+[ \t]+(?<sign>[+-]?)[ \t]*B[ \t]+(?<weight>[0-9]+,[0-9]{2})T[ \t]+[+-]?[0-9]+,[0-9]{2}N[ \t]+[+-]?[0-9]+,[0-9]{2}$';
+      for (final sample in [
+        ('\x020001 000000  -B  0,20T  0,00N  0,20', -0.20),
+        ('\x020001 000000   B  0,38T  0,00N  0,38', 0.38),
+        ('\x020001 000000   B  0,00T  0,00N  0,00', 0.0),
+        ('\x020001 000000  +B  12345,67T  0,00N  12345,67', 12345.67),
+      ]) {
+        final reading = ReadingParser.parse(
+          sample.$1,
+          pattern: pattern,
+          expectedValue: '-0.20',
+        );
+        expect(reading, isNotNull);
+        expect(reading!.numericValue, sample.$2);
+        expect(reading.decimalPlaces, 2);
+      }
+    });
+
+    test('interpreta la receta devuelta por n8n en la ejecución 1575', () {
+      const pattern =
+          r'^\x02[0-9]{4} [0-9]{6}[ \t]*(?<sign>[+-]?)B[ \t]*(?<weight>[0-9]+,[0-9]{2})T[ \t]*[0-9]+,[0-9]{2}N[ \t]*[0-9]+,[0-9]{2}[ \t]*\x03\r\n$';
+      for (final sample in [
+        ('-B 0,20', -0.20),
+        ('B 0,00', 0.0),
+        ('+B 1,25', 1.25),
+        ('B 1,25', 1.25),
+      ]) {
+        final reading = ReadingParser.parse(
+          '\x020001 000000 ${sample.$1}T 0,00N 0,20 \x03\r\n',
+          pattern: pattern,
+          expectedValue: '-0.20',
+        );
+        expect(reading, isNotNull);
+        expect(reading!.numericValue, sample.$2);
+      }
+    });
+
+    test('combina signo separado sin depender del formato del indicador', () {
+      for (final sample in [
+        (r'(?<sign>[+-]?)B\s+(?<weight>\d+,\d{2})T', '-B 0,20T'),
+        (r'W=(?<weight>\d+,\d{2});S=(?<sign>[+-]?)$', 'W=0,20;S=-'),
+      ]) {
+        final reading = ReadingParser.parse(
+          sample.$2,
+          pattern: sample.$1,
+          expectedValue: '-0.20',
+        );
+        expect(reading!.numericValue, -0.20);
+        expect(reading.formattedWeight, '-0.20');
+        final positive = ReadingParser.parse(
+          sample.$2.replaceAll('-', '+'),
+          pattern: sample.$1,
+          expectedValue: '-0.20',
+        );
+        expect(positive!.numericValue, 0.20);
+      }
+    });
+
+    test('conserva el signo al leer negativos, positivos y cero', () {
+      for (final separator in ['.', ',']) {
+        for (final sign in ['-', '+', '']) {
+          final result = ReadingParser.parse(
+            'WT ${sign}0${separator}130 kg',
+            pattern: r'WT\s+([+-]?\d+[.,]\d+)\s+kg',
+            expectedValue: '-0,130',
+          );
+          expect(result, isNotNull);
+          expect(result!.formattedWeight, '${sign}0,130');
+          expect(result.numericValue, sign == '-' ? -0.130 : 0.130);
+          expect(result.decimalPlaces, 3);
+        }
+      }
+      final zero = ReadingParser.parse(
+        'WT 0.000 kg',
+        pattern: r'WT\s+([+-]?\d+[.,]\d+)\s+kg',
+        expectedValue: '-0.130',
+      );
+      expect(zero!.numericValue, 0);
+    });
+
     test('extrae y convierte una lectura usando la receta', () {
       final result = ReadingParser.parse(
         r'ST,+0012,50kg',

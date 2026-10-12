@@ -25,7 +25,7 @@ class RecipeActionsPanel extends StatelessWidget {
     return SettingsExpansionCard(
       title: 'Receta de lectura',
       summary: isProcessing
-          ? 'Procesando con n8n…'
+          ? 'Analizando la muestra…'
           : (hasActiveRecipe ? 'Receta activa' : 'Sin receta configurada'),
       icon: Icons.data_object,
       child: Column(
@@ -33,8 +33,8 @@ class RecipeActionsPanel extends StatelessWidget {
         children: [
           Text(
             isProcessing
-                ? 'n8n está analizando la trama. La aplicación puede seguir utilizándose.'
-                : 'Envía la última trama a n8n para crear o actualizar la regla de lectura.',
+                ? 'Analizando la muestra y creando la receta… La aplicación puede seguir utilizándose.'
+                : 'Envía la última muestra para analizarla y crear o actualizar la receta de lectura.',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),

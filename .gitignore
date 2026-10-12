@@ -36,6 +36,10 @@ migrate_working_dir/
 # Pondera license signing keys must never be committed.
 *.pondera-private-key
 
+# Temporary Office files and local n8n execution screenshots.
+~$*
+/tool/n8n/*.png
+
 # Symbolication related
 app.*.symbols
 
