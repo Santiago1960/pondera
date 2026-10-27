@@ -9,6 +9,7 @@ import 'package:flutter_libserialport/flutter_libserialport.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../app/pondera_header.dart';
 import '../../../core/config/app_config.dart';
@@ -37,6 +38,12 @@ import '../../license/domain/license_verification_result.dart';
 import '../../license/presentation/activation_request_dialog.dart';
 import '../../license/presentation/license_status_panel.dart';
 import '../../recipe/domain/recipe_access_request.dart';
+import '../../recipe/application/authorized_recipe_service.dart';
+import '../../recipe/data/recipe_file_exchange.dart';
+import '../../recipe/data/recipe_key_store.dart';
+import '../../recipe/data/recipe_package_verifier.dart';
+import '../../recipe/data/recipe_state_repository.dart';
+import '../../recipe/domain/offline_recipe_request.dart';
 import '../../recipe/domain/recipe_access_response.dart';
 import '../../recipe/domain/recipe_sample.dart';
 import '../../recipe/domain/recipe_transport_policy.dart';
@@ -136,6 +143,10 @@ class _MainScreenState extends State<MainScreen> {
   int _bytesReceived = 0;
   int _serialIgnoredBytes = 0;
   bool _isSendingToN8n = false;
+  bool _isExchangingRecipeFile = false;
+  DateTime? _activeRecipeValidUntil;
+  late final AuthorizedRecipeService _authorizedRecipeService;
+  final _recipeFileExchange = const RecipeFileExchange();
   bool _isCheckingLicenseStatus = false;
   DateTime? _nextLicenseStatusCheckAt;
   bool _isDemoExpired = false;
@@ -251,6 +262,15 @@ class _MainScreenState extends State<MainScreen> {
     _activationRequestService = ActivationRequestService(identityRepository);
     _offlineLicenseRepository = await OfflineLicenseRepository.create();
     final licenseKeyRegistry = LicenseKeyRegistry.forCurrentBuild();
+    _authorizedRecipeService = AuthorizedRecipeService(
+      RecipeStateRepository(await SharedPreferences.getInstance()),
+      RecipeKeyStore(
+        const SecureInstallationValueStore(
+          SecureInstallationValueStore.defaultStorage,
+        ),
+      ),
+      RecipePackageVerifier(licenseKeyRegistry),
+    );
     _offlineLicenseController = OfflineLicenseController(
       identityRepository,
       _offlineLicenseRepository,
@@ -271,6 +291,28 @@ class _MainScreenState extends State<MainScreen> {
       await _clearRecipeStorage();
     }
     final settings = _settingsRepository.load();
+    ActiveRecipe? protectedRecipe;
+    String? recipeNotice;
+    if (!shouldClearRecipe) {
+      try {
+        protectedRecipe = await _authorizedRecipeService.loadActive(
+          context: await _recipeAuthorizationContext(
+            offlineLicense: offlineLicense,
+            demoLicense: demoLicense,
+          ),
+        );
+      } on FormatException catch (error) {
+        recipeNotice = error.message;
+      } catch (_) {
+        recipeNotice =
+            'No se pudo validar la receta guardada. Solicita una receta nueva.';
+      }
+    }
+    if (protectedRecipe == null && settings.recipePattern.isNotEmpty) {
+      recipeNotice ??=
+          'La receta anterior necesita actualizarse. Crea una nueva o carga una receta autorizada.';
+    }
+    await _settingsRepository.clearRecipe();
     final availablePorts = _listSerialPortsSafely();
     if (!mounted) {
       return;
@@ -306,8 +348,9 @@ class _MainScreenState extends State<MainScreen> {
       _serialParity = settings.serialParity;
       _serialFlowControl = settings.serialFlowControl;
 
-      _savedRegex = settings.recipePattern;
-      _expectedValue = settings.expectedValue;
+      _savedRegex = protectedRecipe?.pattern ?? '';
+      _expectedValue = protectedRecipe?.expectedValue ?? '';
+      _activeRecipeValidUntil = protectedRecipe?.validUntil;
       _prefixController.text = settings.keyboardPrefix;
       _suffixController.text = settings.keyboardSuffix;
       _selectedInputUnit =
@@ -340,6 +383,9 @@ class _MainScreenState extends State<MainScreen> {
       } else {
         _cleanWeightDisplay = 'Sin receta';
       }
+      if (!_isDemoExpired && recipeNotice != null) {
+        _uiStatusMessage = recipeNotice;
+      }
     });
     _weightCaptureController.updateConfiguration(
       _currentWeightCaptureConfiguration(),
@@ -364,6 +410,18 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _checkLicenseDuringRuntime() async {
+    final recipeExpiry = _activeRecipeValidUntil;
+    if (recipeExpiry != null &&
+        !DateTime.now().toUtc().isBefore(recipeExpiry)) {
+      await _clearRecipeStorage();
+      if (!mounted) return;
+      setState(() {
+        _savedRegex = '';
+        _expectedValue = '';
+        _syncCaptureWithRecipe();
+        _uiStatusMessage = 'La receta autorizada venció. Solicita una nueva.';
+      });
+    }
     final offlineLicense = _offlineLicenseResult;
     if (offlineLicense != null &&
         offlineLicense.status != LicenseVerificationStatus.missing) {
@@ -524,11 +582,25 @@ class _MainScreenState extends State<MainScreen> {
         return;
       }
 
+      ActiveRecipe? restoredRecipe;
+      try {
+        restoredRecipe = await _authorizedRecipeService.loadActive(
+          context: await _recipeAuthorizationContext(offlineLicense: result),
+        );
+      } on FormatException {
+        // Una receta ligada a la licencia anterior necesita nueva autorización.
+      }
+      if (!mounted) return;
+
       setState(() {
         _offlineLicenseResult = result;
         _demoLicense = null;
         _isDemoExpired = false;
         _demoStatusMessage = result.message;
+        _savedRegex = restoredRecipe?.pattern ?? '';
+        _expectedValue = restoredRecipe?.expectedValue ?? '';
+        _activeRecipeValidUntil = restoredRecipe?.validUntil;
+        _syncCaptureWithRecipe();
         _cleanWeightDisplay = _savedRegex.isEmpty ? 'Sin receta' : '---';
         _uiStatusMessage = 'Licencia activada. Lista para continuar.';
         _networkDiagnostics =
@@ -1189,7 +1261,8 @@ class _MainScreenState extends State<MainScreen> {
       );
 
       if (response.recipeAction == RecipeAction.replace) {
-        await _settingsRepository.saveRecipe(
+        await _storeOnlineRecipe(
+          sample: sample,
           pattern: newRegex!,
           expectedValue: expectedValue,
         );
@@ -1205,7 +1278,7 @@ class _MainScreenState extends State<MainScreen> {
       }
 
       if (response.recipeAction == RecipeAction.delete) {
-        await _settingsRepository.clearRecipe();
+        await _clearRecipeStorage();
         if (mounted) {
           setState(() {
             _savedRegex = '';
@@ -1283,8 +1356,179 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  RecipeSample? _latestRecipeSample() {
+    if (_receivedDataLog.isEmpty) return null;
+    final rawData = _receivedDataLog.last.rawData;
+    final frames = ReadingFrameSplitter.splitComplete(rawData).completeFrames;
+    return RecipeSample(frames.lastOrNull ?? rawData);
+  }
+
+  Future<RecipeAuthorizationContext> _recipeAuthorizationContext({
+    LicenseVerificationResult? offlineLicense,
+    DemoLicense? demoLicense,
+  }) async {
+    final license = offlineLicense ?? _offlineLicenseResult;
+    final payload = license?.payload;
+    final demo = demoLicense ?? _demoLicense;
+    return RecipeAuthorizationContext(
+      installationId: _installationId,
+      deviceFingerprintHash: await const DeviceFingerprint().readHash(),
+      isUsable: license?.status == LicenseVerificationStatus.missing
+          ? !(demo?.isExpired ?? true)
+          : (license?.isUsable ?? false),
+      licenseId: payload?.licenseId,
+      licenseSha256: payload == null
+          ? null
+          : await _offlineLicenseRepository.loadSha256(),
+      licenseDocument: payload == null
+          ? null
+          : await _offlineLicenseRepository.load(),
+      validUntil: payload?.graceUntil ?? payload?.expiresAt,
+    );
+  }
+
+  Future<void> _storeOnlineRecipe({
+    required RecipeSample sample,
+    required String pattern,
+    required String expectedValue,
+  }) async {
+    await _checkLicenseDuringRuntime();
+    if (_isDemoExpired) throw FormatException(_demoStatusMessage);
+    await _authorizedRecipeService.saveOnline(
+      context: await _recipeAuthorizationContext(),
+      sample: sample,
+      pattern: pattern,
+      expectedValue: expectedValue,
+    );
+    await _settingsRepository.clearRecipe();
+    _activeRecipeValidUntil = null;
+  }
+
+  Future<void> _exportOfflineRecipeRequest() async {
+    if (_isSendingToN8n || _isExchangingRecipeFile) return;
+    setState(() => _isExchangingRecipeFile = true);
+    try {
+      await _checkLicenseDuringRuntime();
+      if (!mounted) return;
+      if (_isDemoExpired) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_demoStatusMessage)));
+        return;
+      }
+      final sample = _latestRecipeSample();
+      if (sample == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Primero captura una trama.')),
+        );
+        return;
+      }
+      (await _recipeAuthorizationContext()).requireLicensed();
+      if (!mounted) return;
+      final expectedValue = await showDialog<String>(
+        context: context,
+        builder: (_) => RecipeSampleDialog(
+          sample: sample,
+          initialExpectedValue: _expectedValue,
+          submitLabel: 'Guardar solicitud',
+        ),
+      );
+      if (expectedValue == null || !mounted) return;
+      await _checkLicenseDuringRuntime();
+      if (!mounted) return;
+      if (_isDemoExpired) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_demoStatusMessage)));
+        return;
+      }
+      final request = await _authorizedRecipeService.createRequest(
+        context: await _recipeAuthorizationContext(),
+        sample: sample,
+        expectedValue: expectedValue,
+        platform: Platform.operatingSystem,
+        appVersion: _appVersion,
+      );
+      final path = await _recipeFileExchange.exportRequest(request);
+      if (path == null) return;
+      await _authorizedRecipeService.rememberRequest(request);
+      if (!mounted) return;
+      setState(() {
+        _uiStatusMessage =
+            'Solicitud guardada. Envía el archivo a Bitgenial y carga la respuesta autorizada.';
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Solicitud guardada en $path')));
+    } on FormatException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } catch (error) {
+      debugPrint('No se pudo exportar la solicitud de receta: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudo guardar la solicitud. Intenta nuevamente.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isExchangingRecipeFile = false);
+    }
+  }
+
+  Future<void> _importAuthorizedRecipe() async {
+    if (_isSendingToN8n || _isExchangingRecipeFile) return;
+    setState(() => _isExchangingRecipeFile = true);
+    try {
+      await _checkLicenseDuringRuntime();
+      (await _recipeAuthorizationContext()).requireLicensed();
+      final document = await _recipeFileExchange.importResponse();
+      if (document == null || !mounted) return;
+      await _checkLicenseDuringRuntime();
+      final recipe = await _authorizedRecipeService.importResponse(
+        document,
+        context: await _recipeAuthorizationContext(),
+      );
+      await _settingsRepository.clearRecipe();
+      if (!mounted) return;
+      setState(() {
+        _savedRegex = recipe.pattern;
+        _expectedValue = recipe.expectedValue;
+        _activeRecipeValidUntil = recipe.validUntil;
+        _syncCaptureWithRecipe();
+        _uiStatusMessage =
+            'Receta de Bitgenial verificada y activada correctamente.';
+      });
+    } on FormatException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } catch (error) {
+      debugPrint('No se pudo cargar la receta autorizada: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No se pudo cargar la receta autorizada. La receta actual no fue modificada.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isExchangingRecipeFile = false);
+    }
+  }
+
   Future<void> _sendToN8nIa() async {
-    if (_isSendingToN8n) {
+    if (_isSendingToN8n || _isExchangingRecipeFile) {
       return;
     }
     if (_isDemoExpired) {
@@ -1293,18 +1537,14 @@ class _MainScreenState extends State<MainScreen> {
       ).showSnackBar(SnackBar(content: Text(_demoStatusMessage)));
       return;
     }
-    if (_receivedDataLog.isEmpty) {
+    final sample = _latestRecipeSample();
+    if (sample == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Primero captura una trama.')),
       );
       return;
     }
-    final latestRawData = _receivedDataLog.last.rawData;
-    final completeFrames = ReadingFrameSplitter.splitComplete(
-      latestRawData,
-    ).completeFrames;
-    final rawData = completeFrames.lastOrNull ?? latestRawData;
-    final sample = RecipeSample(rawData);
+    final rawData = sample.rawData;
     final expectedValue = await _requestExpectedValue(sample);
     if (expectedValue == null || !mounted) {
       return;
@@ -1364,7 +1604,8 @@ class _MainScreenState extends State<MainScreen> {
             return;
           }
 
-          await _settingsRepository.saveRecipe(
+          await _storeOnlineRecipe(
+            sample: sample,
             pattern: newRegex,
             expectedValue: expectedValue,
           );
@@ -1416,7 +1657,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _clearRecipe() async {
-    await _settingsRepository.clearRecipe();
+    await _clearRecipeStorage();
     setState(() {
       _savedRegex = '';
       _expectedValue = '';
@@ -1446,11 +1687,9 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _clearRecipeStorage() async {
-    if (_savedRegex.isEmpty &&
-        _settingsRepository.load().recipePattern.isEmpty) {
-      return;
-    }
+    await _authorizedRecipeService.clear();
     await _settingsRepository.clearRecipe();
+    _activeRecipeValidUntil = null;
   }
 
   String _getCurrentTimestamp() {
@@ -2197,9 +2436,12 @@ end tell
               const SizedBox(height: 10),
               RecipeActionsPanel(
                 savedRegex: _savedRegex,
-                isEnabled: !_isDemoExpired,
+                isEnabled: !_isDemoExpired && !_isExchangingRecipeFile,
+                canUseOffline: _offlineLicenseResult?.isUsable ?? false,
                 isProcessing: _isSendingToN8n,
                 onSendToN8n: _sendToN8nIa,
+                onExportOfflineRequest: _exportOfflineRecipeRequest,
+                onImportAuthorizedRecipe: _importAuthorizedRecipe,
                 onClearRecipe: _clearRecipe,
               ),
             ],

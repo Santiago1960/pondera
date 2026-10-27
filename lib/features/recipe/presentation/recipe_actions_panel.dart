@@ -8,6 +8,9 @@ class RecipeActionsPanel extends StatelessWidget {
     required this.isEnabled,
     required this.isProcessing,
     required this.onSendToN8n,
+    required this.onExportOfflineRequest,
+    required this.onImportAuthorizedRecipe,
+    this.canUseOffline = false,
     required this.onClearRecipe,
     super.key,
   });
@@ -16,6 +19,9 @@ class RecipeActionsPanel extends StatelessWidget {
   final bool isEnabled;
   final bool isProcessing;
   final VoidCallback onSendToN8n;
+  final VoidCallback onExportOfflineRequest;
+  final VoidCallback onImportAuthorizedRecipe;
+  final bool canUseOffline;
   final VoidCallback onClearRecipe;
 
   bool get hasActiveRecipe => savedRegex.isNotEmpty;
@@ -34,7 +40,7 @@ class RecipeActionsPanel extends StatelessWidget {
           Text(
             isProcessing
                 ? 'Analizando la muestra y creando la receta… La aplicación puede seguir utilizándose.'
-                : 'Envía la última muestra para analizarla y crear o actualizar la receta de lectura.',
+                : 'Crea la receta por internet o solicita a Bitgenial un archivo autorizado para este equipo.',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
@@ -46,15 +52,14 @@ class RecipeActionsPanel extends StatelessWidget {
           if (hasActiveRecipe) ...[
             const SizedBox(height: 12),
             Text(
-              'Expresión activa',
+              'Receta protegida activa',
               style: Theme.of(
                 context,
               ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 4),
-            SelectableText(
-              savedRegex,
-              style: const TextStyle(fontFamily: 'IBMPlexMono', fontSize: 12),
+            const Text(
+              'Pondera conserva la receta protegida y comprueba su autorización al abrir la aplicación.',
             ),
           ],
           const SizedBox(height: 14),
@@ -78,6 +83,20 @@ class RecipeActionsPanel extends StatelessWidget {
                             : 'Crear receta'),
                 ),
               ),
+              OutlinedButton.icon(
+                onPressed: isEnabled && !isProcessing && canUseOffline
+                    ? onExportOfflineRequest
+                    : null,
+                icon: const Icon(Icons.file_upload_outlined),
+                label: const Text('Solicitar receta sin internet'),
+              ),
+              OutlinedButton.icon(
+                onPressed: isEnabled && !isProcessing && canUseOffline
+                    ? onImportAuthorizedRecipe
+                    : null,
+                icon: const Icon(Icons.file_download_outlined),
+                label: const Text('Cargar receta autorizada'),
+              ),
               if (hasActiveRecipe)
                 TextButton.icon(
                   onPressed: isEnabled && !isProcessing
@@ -87,6 +106,10 @@ class RecipeActionsPanel extends StatelessWidget {
                   label: const Text('Eliminar receta'),
                 ),
             ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Sin internet: guarda la solicitud y envíala a Bitgenial por otro dispositivo. Luego carga el archivo de respuesta. Requiere una licencia importada vigente.',
           ),
         ],
       ),

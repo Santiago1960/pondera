@@ -8,11 +8,13 @@ class RecipeSampleDialog extends StatefulWidget {
   const RecipeSampleDialog({
     required this.sample,
     this.initialExpectedValue = '',
+    this.submitLabel = 'Enviar',
     super.key,
   });
 
   final RecipeSample sample;
   final String initialExpectedValue;
+  final String submitLabel;
 
   @override
   State<RecipeSampleDialog> createState() => _RecipeSampleDialogState();
@@ -105,7 +107,7 @@ class _RecipeSampleDialogState extends State<RecipeSampleDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancelar'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Enviar')),
+        FilledButton(onPressed: _submit, child: Text(widget.submitLabel)),
       ],
     );
   }

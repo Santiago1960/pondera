@@ -1,5 +1,5 @@
 #define AppName "Pondera"
-#define AppVersion "1.0.8"
+#define AppVersion "1.0.10"
 #define AppPublisher "Bitgenial"
 #define AppExecutable "pondera.exe"
 #define BuildDirectory "..\build\windows\x64\runner\Release"
@@ -25,7 +25,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=1.0.8.9
+VersionInfoVersion=1.0.10.11
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription=Instalador de {#AppName}
 VersionInfoProductName={#AppName}
