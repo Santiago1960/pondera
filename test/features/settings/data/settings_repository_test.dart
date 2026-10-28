@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pondera/core/constants/preference_keys.dart';
+import 'package:pondera/features/scale_reading/domain/weight_output_format.dart';
 import 'package:pondera/features/settings/data/settings_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,6 +19,12 @@ void main() {
     expect(settings.serialBaudRate, 9600);
     expect(settings.inputUnit, 'kg');
     expect(settings.outputUnit, 'kg');
+    expect(
+      settings.weightOutputFormat.separator,
+      WeightDecimalSeparator.indicator,
+    );
+    expect(settings.weightOutputFormat.decimalPlaces, isNull);
+    expect(settings.weightOutputFormat.roundingMode, WeightRoundingMode.round);
     expect(settings.captureMode, 'indicatorPrint');
     expect(settings.captureStableMilliseconds, 1000);
     expect(settings.captureRangeEnabled, isFalse);
@@ -103,6 +110,75 @@ void main() {
     expect(
       preferences.getString(PreferenceKeys.demoLastRun),
       DateTime(2026, 7, 2, 8).toIso8601String(),
+    );
+  });
+
+  test('guarda el formato independiente de la receta y lo restaura', () async {
+    final preferences = await SharedPreferences.getInstance();
+    final repository = SettingsRepository(preferences);
+    await repository.saveRecipe(
+      pattern: r'(\d+\.\d{3})',
+      expectedValue: '0.508',
+    );
+    await repository.saveWeightOutputFormat(
+      const WeightOutputFormat(
+        separator: WeightDecimalSeparator.comma,
+        decimalPlaces: 2,
+        roundingMode: WeightRoundingMode.truncate,
+      ),
+    );
+    final restored = SettingsRepository(preferences).load();
+    expect(restored.expectedValue, '0.508');
+    expect(restored.weightOutputFormat.separator, WeightDecimalSeparator.comma);
+    expect(restored.weightOutputFormat.decimalPlaces, 2);
+    expect(
+      restored.weightOutputFormat.roundingMode,
+      WeightRoundingMode.truncate,
+    );
+    await repository.clearRecipe();
+    expect(repository.load().weightOutputFormat.decimalPlaces, 2);
+    await repository.saveWeightOutputFormat(const WeightOutputFormat());
+    expect(repository.load().weightOutputFormat.decimalPlaces, isNull);
+    expect(
+      preferences.containsKey(PreferenceKeys.outputDecimalPlaces),
+      isFalse,
+    );
+  });
+
+  test('descarta opciones de formato desconocidas al cargar', () async {
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.outputDecimalSeparator: 'invalid',
+      PreferenceKeys.outputDecimalPlaces: 99,
+      PreferenceKeys.outputRoundingMode: 'invalid',
+    });
+    final settings = SettingsRepository(
+      await SharedPreferences.getInstance(),
+    ).load();
+    expect(
+      settings.weightOutputFormat.separator,
+      WeightDecimalSeparator.indicator,
+    );
+    expect(settings.weightOutputFormat.decimalPlaces, isNull);
+    expect(settings.weightOutputFormat.roundingMode, WeightRoundingMode.round);
+  });
+
+  test('migra la opción anterior de receta al formato del indicador', () async {
+    SharedPreferences.setMockInitialValues({
+      PreferenceKeys.outputDecimalSeparator: 'recipe',
+      PreferenceKeys.outputDecimalPlaces: 2,
+      PreferenceKeys.outputRoundingMode: 'truncate',
+    });
+    final settings = SettingsRepository(
+      await SharedPreferences.getInstance(),
+    ).load();
+    expect(
+      settings.weightOutputFormat.separator,
+      WeightDecimalSeparator.indicator,
+    );
+    expect(settings.weightOutputFormat.decimalPlaces, 2);
+    expect(
+      settings.weightOutputFormat.roundingMode,
+      WeightRoundingMode.truncate,
     );
   });
 

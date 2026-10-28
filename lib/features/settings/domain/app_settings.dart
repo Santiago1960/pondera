@@ -1,3 +1,5 @@
+import '../../scale_reading/domain/weight_output_format.dart';
+
 class AppSettings {
   const AppSettings({
     required this.connectionType,
@@ -15,6 +17,7 @@ class AppSettings {
     required this.keyboardSuffix,
     required this.inputUnit,
     required this.outputUnit,
+    this.weightOutputFormat = const WeightOutputFormat(),
     required this.captureMode,
     required this.captureStableMilliseconds,
     required this.captureRangeEnabled,
@@ -38,6 +41,7 @@ class AppSettings {
   final String keyboardSuffix;
   final String inputUnit;
   final String outputUnit;
+  final WeightOutputFormat weightOutputFormat;
   final String captureMode;
   final int captureStableMilliseconds;
   final bool captureRangeEnabled;

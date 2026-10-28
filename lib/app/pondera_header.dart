@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 
 class PonderaHeader extends StatelessWidget {
-  const PonderaHeader({super.key});
+  const PonderaHeader({this.appVersion = '', super.key});
+
+  final String appVersion;
 
   @override
   Widget build(BuildContext context) {
+    final versionParts = appVersion.trim().split('+');
+    final version = versionParts.first;
+    final buildNumber = versionParts.length > 1 ? versionParts[1] : '';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -13,9 +18,9 @@ class PonderaHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Theme.of(context).colorScheme.primary.withValues(
-                  alpha: 0.12,
-                ),
+                color: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.12),
                 blurRadius: 12,
                 offset: const Offset(0, 3),
               ),
@@ -34,12 +39,30 @@ class PonderaHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        Text(
-          'Pondera',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.15,
-          ),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Pondera',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.15,
+              ),
+            ),
+            if (version.isNotEmpty)
+              Tooltip(
+                message: buildNumber.isEmpty
+                    ? 'Versión instalada'
+                    : 'Compilación $buildNumber',
+                child: Text(
+                  'v$version',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
         ),
       ],
     );

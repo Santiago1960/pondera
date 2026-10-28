@@ -54,12 +54,13 @@ import '../domain/reading_frame_splitter.dart';
 import '../domain/reading_parser.dart';
 import '../domain/serial_frame_decoder.dart';
 import '../domain/weight_capture_controller.dart';
-import '../domain/weight_converter.dart';
+import '../domain/weight_output_format.dart';
 import '../domain/weight_unit.dart';
 import 'current_weight_panel.dart';
 import 'raw_data_log_panel.dart';
 import 'units_settings_panel.dart';
 import 'weight_capture_settings_panel.dart';
+import 'weight_output_settings_panel.dart';
 
 const MethodChannel _windowsKeyboardChannel = MethodChannel(
   'pondera/windows_keyboard',
@@ -109,6 +110,8 @@ class _MainScreenState extends State<MainScreen> {
     defaultValue: 'https://licensing.bitgenial.com/api/license-status',
   );
   String _expectedValue = '';
+  WeightOutputFormat _weightOutputFormat = const WeightOutputFormat();
+  ReadingParseResult? _latestOutputReading;
 
   Socket? _socket;
   SerialPort? _serialPort;
@@ -357,6 +360,7 @@ class _MainScreenState extends State<MainScreen> {
           WeightUnit.fromCode(settings.inputUnit) ?? WeightUnit.kilogram;
       _selectedOutputUnit =
           WeightUnit.fromCode(settings.outputUnit) ?? WeightUnit.kilogram;
+      _weightOutputFormat = settings.weightOutputFormat;
       _selectedCaptureMode = _availableCaptureMode(settings.captureMode);
       _captureRangeEnabled = settings.captureRangeEnabled;
       _captureRangeUnit =
@@ -712,6 +716,30 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  Future<void> _changeWeightOutputFormat(WeightOutputFormat format) async {
+    setState(() {
+      _weightOutputFormat = format;
+      _weightCaptureController.clearReading();
+      if (_savedRegex.isNotEmpty && !_isDemoExpired) {
+        final reading = _latestOutputReading;
+        _cleanWeightDisplay = reading == null
+            ? '---'
+            : _formatOutputReading(reading);
+        _uiStatusMessage =
+            'Formato actualizado. Se aplicará a la siguiente captura.';
+      }
+    });
+    await _settingsRepository.saveWeightOutputFormat(format);
+  }
+
+  String _formatOutputReading(ReadingParseResult reading) {
+    return _weightOutputFormat.formatReading(
+      reading,
+      inputUnit: _selectedInputUnit,
+      outputUnit: _selectedOutputUnit,
+    );
+  }
+
   WeightCaptureMode _availableCaptureMode(String storedMode) {
     return switch (storedMode) {
       'indicatorPrint' => WeightCaptureMode.indicatorPrint,
@@ -754,6 +782,7 @@ class _MainScreenState extends State<MainScreen> {
       : 'cero';
 
   void _syncCaptureWithRecipe() {
+    _latestOutputReading = null;
     _weightCaptureController.updateConfiguration(
       _currentWeightCaptureConfiguration(),
     );
@@ -2106,6 +2135,7 @@ end tell
         expectedValue: _expectedValue,
       );
       if (reading == null) {
+        _latestOutputReading = null;
         _weightCaptureController.clearReading();
         _cleanWeightDisplay = '---';
         _captureStatusIsError = true;
@@ -2120,10 +2150,9 @@ end tell
       }
       _recipeMismatchReported = false;
 
-      final nuevoPesoOriginal = reading.formattedWeight;
-
       final parsedWeight = reading.numericValue;
-      if (parsedWeight == null) {
+      if (parsedWeight == null || !parsedWeight.isFinite) {
+        _latestOutputReading = null;
         _weightCaptureController.clearReading();
         _cleanWeightDisplay = '---';
         if (_selectedCaptureMode != WeightCaptureMode.indicatorPrint) {
@@ -2138,18 +2167,8 @@ end tell
         return;
       }
 
-      final double valorConvertido = WeightConverter.convert(
-        parsedWeight,
-        from: _selectedInputUnit,
-        to: _selectedOutputUnit,
-      );
-      final valorString = valorConvertido.toStringAsFixed(
-        reading.decimalPlaces,
-      );
-      final pesoFinalAInyectar = ReadingParser.formatWeight(
-        valorString,
-        expectedValue: _expectedValue,
-      );
+      _latestOutputReading = reading;
+      final pesoFinalAInyectar = _formatOutputReading(reading);
 
       _cleanWeightDisplay = pesoFinalAInyectar;
       _scheduleTelemetryRefresh();
@@ -2182,7 +2201,7 @@ end tell
       await _applyWeightCaptureDecision(
         decision,
         displayText: pesoFinalAInyectar,
-        zeroDisplayText: nuevoPesoOriginal,
+        zeroDisplayText: pesoFinalAInyectar,
       );
     }
   }
@@ -2234,6 +2253,7 @@ end tell
   }
 
   void _releaseConnectionResources() {
+    _latestOutputReading = null;
     _pollingTimer?.cancel();
     _frameFlushTimer?.cancel();
     _frameFlushTimer = null;
@@ -2261,7 +2281,7 @@ end tell
     final licensePayload = _offlineLicenseResult?.payload;
     return Scaffold(
       appBar: AppBar(
-        title: const PonderaHeader(),
+        title: PonderaHeader(appVersion: _appVersion),
         actions: [
           IconButton(
             tooltip: 'Abrir manual de ayuda',
@@ -2402,6 +2422,18 @@ end tell
                     _selectedOutputUnit = unit;
                     _saveUnitsConfig();
                   });
+                },
+              ),
+              const SizedBox(height: 10),
+              WeightOutputSettingsPanel(
+                format: _weightOutputFormat,
+                reading: _savedRegex.isEmpty || _isDemoExpired
+                    ? null
+                    : _latestOutputReading,
+                inputUnit: _selectedInputUnit,
+                outputUnit: _selectedOutputUnit,
+                onChanged: (format) {
+                  unawaited(_changeWeightOutputFormat(format));
                 },
               ),
               const SizedBox(height: 10),

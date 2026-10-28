@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/preference_keys.dart';
+import '../../scale_reading/domain/weight_output_format.dart';
 import '../domain/app_settings.dart';
 
 class SettingsRepository {
@@ -45,6 +46,13 @@ class SettingsRepository {
       keyboardSuffix: _preferences.getString(PreferenceKeys.suffix) ?? '',
       inputUnit: _preferences.getString(PreferenceKeys.inputUnit) ?? 'kg',
       outputUnit: _preferences.getString(PreferenceKeys.outputUnit) ?? 'kg',
+      weightOutputFormat: WeightOutputFormat.fromStoredValues(
+        separator: _preferences.getString(
+          PreferenceKeys.outputDecimalSeparator,
+        ),
+        decimalPlaces: _preferences.getInt(PreferenceKeys.outputDecimalPlaces),
+        roundingMode: _preferences.getString(PreferenceKeys.outputRoundingMode),
+      ),
       captureMode:
           _preferences.getString(PreferenceKeys.captureMode) ??
           'indicatorPrint',
@@ -102,6 +110,25 @@ class SettingsRepository {
   }) async {
     await _preferences.setString(PreferenceKeys.inputUnit, inputUnit);
     await _preferences.setString(PreferenceKeys.outputUnit, outputUnit);
+  }
+
+  Future<void> saveWeightOutputFormat(WeightOutputFormat format) async {
+    await _preferences.setString(
+      PreferenceKeys.outputDecimalSeparator,
+      format.separator.name,
+    );
+    if (format.decimalPlaces == null) {
+      await _preferences.remove(PreferenceKeys.outputDecimalPlaces);
+    } else {
+      await _preferences.setInt(
+        PreferenceKeys.outputDecimalPlaces,
+        format.decimalPlaces!,
+      );
+    }
+    await _preferences.setString(
+      PreferenceKeys.outputRoundingMode,
+      format.roundingMode.name,
+    );
   }
 
   Future<void> saveWeightCapture({

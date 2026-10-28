@@ -65,6 +65,12 @@ class _RecipeSampleDialogState extends State<RecipeSampleDialog> {
                 const Text(
                   'Esta muestra queda fija. Ingresa el peso que corresponde a ella, aunque el indicador cambie después.',
                 ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Ingresa el peso completo del indicador, con punto o coma. '
+                  'Para elegir el separador, los decimales y si deseas redondear '
+                  'o recortar al escribir en Excel, usa «Formato de salida».',
+                ),
                 const SizedBox(height: 16),
                 TextFormField(
                   initialValue: _enteredValue,
@@ -80,6 +86,7 @@ class _RecipeSampleDialogState extends State<RecipeSampleDialog> {
                   decoration: const InputDecoration(
                     labelText: 'Peso correspondiente a la muestra',
                     hintText: 'Ej.: 0.130 o -0,130',
+                    errorMaxLines: 3,
                     border: OutlineInputBorder(),
                   ),
                   validator: (value) {
@@ -90,7 +97,7 @@ class _RecipeSampleDialogState extends State<RecipeSampleDialog> {
                     if (suggested != null &&
                         double.tryParse(value!.trim().replaceAll(',', '.')) !=
                             double.tryParse(suggested.replaceAll(',', '.'))) {
-                      return 'El peso de esta muestra es $suggested.';
+                      return 'Ingresa el peso completo: $suggested. Ajusta los decimales en «Formato de salida».';
                     }
                     return null;
                   },

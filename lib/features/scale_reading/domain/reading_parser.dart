@@ -3,11 +3,13 @@ class ReadingParseResult {
     required this.formattedWeight,
     required this.numericValue,
     required this.decimalPlaces,
+    required this.sourceWeight,
   });
 
   final String formattedWeight;
   final double? numericValue;
   final int decimalPlaces;
+  final String sourceWeight;
 }
 
 class ReadingParser {
@@ -50,6 +52,7 @@ class ReadingParser {
         .replaceAll(',', '.');
 
     return ReadingParseResult(
+      sourceWeight: capturedWeight?.trim() ?? '',
       formattedWeight: formattedWeight,
       numericValue: double.tryParse(numericText),
       decimalPlaces: numericText.contains('.')

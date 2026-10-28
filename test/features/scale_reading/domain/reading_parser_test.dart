@@ -61,6 +61,24 @@ void main() {
   });
 
   group('ReadingParser.parse', () {
+    test(
+      'conserva el texto del indicador antes de cambiar el separador de la receta',
+      () {
+        for (final source in ['+001.238', '-001,238', '0.000', '125']) {
+          final result = ReadingParser.parse(
+            '${source}kg',
+            pattern: r'^([+-]?\d+(?:[.,]\d+)?)kg$',
+            expectedValue: '0,100',
+          )!;
+          expect(result.sourceWeight, source);
+          expect(
+            result.numericValue,
+            double.parse(source.replaceAll(',', '.')),
+          );
+        }
+      },
+    );
+
     test('GI-410 cambia de negativo a positivo con relleno en el signo', () {
       const pattern =
           r'^\x02[+-]?[0-9]+[ \t]+[+-]?[0-9]+[ \t]+(?<sign>[+-]?)[ \t]*B[ \t]+(?<weight>[0-9]+,[0-9]{2})T[ \t]+[+-]?[0-9]+,[0-9]{2}N[ \t]+[+-]?[0-9]+,[0-9]{2}$';

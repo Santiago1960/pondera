@@ -16,6 +16,9 @@ class PreferenceKeys {
   static const suffix = 'pondera_suffix';
   static const inputUnit = 'pondera_unit_in';
   static const outputUnit = 'pondera_unit_out';
+  static const outputDecimalSeparator = 'pondera_output_decimal_separator';
+  static const outputDecimalPlaces = 'pondera_output_decimal_places';
+  static const outputRoundingMode = 'pondera_output_rounding_mode';
   static const captureMode = 'pondera_capture_mode';
   static const captureStableMilliseconds =
       'pondera_capture_stable_milliseconds';

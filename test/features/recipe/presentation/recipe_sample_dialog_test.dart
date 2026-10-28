@@ -4,50 +4,74 @@ import 'package:pondera/features/recipe/domain/recipe_sample.dart';
 import 'package:pondera/features/recipe/presentation/recipe_sample_dialog.dart';
 
 void main() {
-  testWidgets(
-    'mantiene la muestra BR-15 y su peso aunque cambie la recepción',
-    (tester) async {
-      var currentRawData = '+000.563kg';
-      String? submittedValue;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Builder(
-            builder: (context) => Scaffold(
-              body: FilledButton(
-                onPressed: () async {
-                  submittedValue = await showDialog<String>(
-                    context: context,
-                    builder: (_) => RecipeSampleDialog(
-                      sample: RecipeSample(currentRawData),
-                      initialExpectedValue: '0.561',
-                    ),
-                  );
-                },
-                child: const Text('Crear receta'),
-              ),
+  testWidgets('mantiene la muestra BR-15 y su peso aunque cambie la recepción', (
+    tester,
+  ) async {
+    var currentRawData = '+000.563kg';
+    String? submittedValue;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: FilledButton(
+              onPressed: () async {
+                submittedValue = await showDialog<String>(
+                  context: context,
+                  builder: (_) => RecipeSampleDialog(
+                    sample: RecipeSample(currentRawData),
+                    initialExpectedValue: '0.561',
+                  ),
+                );
+              },
+              child: const Text('Crear receta'),
             ),
           ),
         ),
-      );
-      await tester.tap(find.text('Crear receta'));
-      await tester.pumpAndSettle();
-      currentRawData = '+000.561kg';
-      await tester.pump();
+      ),
+    );
+    await tester.tap(find.text('Crear receta'));
+    await tester.pumpAndSettle();
+    currentRawData = '+000.561kg';
+    await tester.pump();
 
-      expect(find.text('+000.563kg'), findsOneWidget);
-      expect(find.widgetWithText(TextFormField, '0.563'), findsOneWidget);
-      await tester.enterText(find.byType(TextFormField), '0.561');
-      await tester.tap(find.text('Enviar'));
-      await tester.pumpAndSettle();
-      expect(find.text('El peso de esta muestra es 0.563.'), findsOneWidget);
-      expect(submittedValue, isNull);
+    expect(find.text('+000.563kg'), findsOneWidget);
+    expect(find.widgetWithText(TextFormField, '0.563'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField), '0.561');
+    await tester.tap(find.text('Enviar'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Ingresa el peso completo: 0.563. Ajusta los decimales en «Formato de salida».',
+      ),
+      findsOneWidget,
+    );
+    expect(submittedValue, isNull);
 
-      await tester.enterText(find.byType(TextFormField), '0,563');
-      await tester.tap(find.text('Enviar'));
-      await tester.pumpAndSettle();
-      expect(submittedValue, '0,563');
-    },
-  );
+    await tester.enterText(find.byType(TextFormField), '0,563');
+    await tester.tap(find.text('Enviar'));
+    await tester.pumpAndSettle();
+    expect(submittedValue, '0,563');
+  });
+
+  testWidgets('explica que la precisión de salida se configura por separado', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: RecipeSampleDialog(sample: RecipeSample('+000.508kg')),
+      ),
+    );
+    expect(find.textContaining('Para elegir el separador'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField), '0,50');
+    await tester.tap(find.text('Enviar'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Ingresa el peso completo: 0.508. Ajusta los decimales en «Formato de salida».',
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('permite seleccionar el peso de una trama con varios campos', (
     tester,
